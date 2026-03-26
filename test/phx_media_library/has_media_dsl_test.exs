@@ -19,7 +19,7 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     end
 
     media_collections do
-      collection(:images, disk: :s3, max_files: 20)
+      collection(:images, disk: :s3, max_files: 20, responsive: true)
       collection(:documents, accepts: ~w(application/pdf text/plain))
       collection(:avatar, single_file: true, fallback_url: "/images/default.png")
     end
@@ -223,13 +223,16 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
       images = DSLPost.get_media_collection(:images)
       assert images.disk == :s3
       assert images.max_files == 20
+      assert images.responsive == true
 
       documents = DSLPost.get_media_collection(:documents)
       assert documents.accepts == ~w(application/pdf text/plain)
+      assert documents.responsive == nil
 
       avatar = DSLPost.get_media_collection(:avatar)
       assert avatar.single_file == true
       assert avatar.fallback_url == "/images/default.png"
+      assert avatar.responsive == nil
     end
 
     test "get_media_collection/1 returns nil for unknown collection" do

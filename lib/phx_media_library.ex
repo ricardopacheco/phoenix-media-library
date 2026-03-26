@@ -243,6 +243,72 @@ defmodule PhxMediaLibrary do
     end
   end
 
+  @doc """
+  Get URLs and metadata for all generated conversions of the first media item
+  in a collection.
+
+  Returns a list of maps with `:name`, `:type` (mime_type), `:width`,
+  `:height`, and `:url` for each successfully generated conversion.
+
+  ## Examples
+
+      # All generated conversions
+      PhxMediaLibrary.get_all_media_url(badge, :avatar)
+      #=> [
+      #     %{name: :large, type: "image/png", width: 512, height: 512, url: "https://..."},
+      #     %{name: :small, type: "image/png", width: 50, height: 50, url: "https://..."}
+      #   ]
+
+      # Only specific conversions
+      PhxMediaLibrary.get_all_media_url(badge, :avatar, [:large, :thumbnail])
+
+  """
+  @spec get_all_media_url(Ecto.Schema.t(), atom(), [atom()]) :: [map()]
+  def get_all_media_url(model, collection_name, filter \\ []) do
+    case get_first_media(model, collection_name) do
+      nil ->
+        []
+
+      media ->
+        generated =
+          media.generated_conversions
+          |> Enum.filter(fn {_name, value} -> value == true end)
+          |> Enum.map(fn {name, _} -> String.to_existing_atom(name) end)
+
+        names =
+          if filter == [] do
+            generated
+          else
+            Enum.filter(generated, &(&1 in filter))
+          end
+
+        conversion_defs = get_conversion_definitions(model, collection_name)
+
+        Enum.map(names, fn name ->
+          definition = Enum.find(conversion_defs, fn c -> c.name == name end)
+
+          %{
+            name: name,
+            type: media.mime_type,
+            width: if(definition, do: definition.width),
+            height: if(definition, do: definition.height),
+            url: Media.url(media, name)
+          }
+        end)
+    end
+  end
+
+  defp get_conversion_definitions(model, collection_name) do
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
+    if function_exported?(module, :get_media_conversions, 1) do
+      module.get_media_conversions(collection_name)
+    else
+      []
+    end
+  end
+
   # ---------------------------------------------------------------------------
   # URL / Path / Srcset delegates
   # ---------------------------------------------------------------------------

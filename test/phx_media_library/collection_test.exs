@@ -55,6 +55,24 @@ defmodule PhxMediaLibrary.CollectionTest do
       assert collection.fallback_path == "priv/static/images/default-avatar.png"
     end
 
+    test "creates a collection with responsive: true" do
+      collection = Collection.new(:images, responsive: true)
+
+      assert collection.responsive == true
+    end
+
+    test "creates a collection with responsive: false" do
+      collection = Collection.new(:images, responsive: false)
+
+      assert collection.responsive == false
+    end
+
+    test "responsive defaults to nil" do
+      collection = Collection.new(:images)
+
+      assert collection.responsive == nil
+    end
+
     test "creates a collection with all options" do
       collection =
         Collection.new(:documents,
@@ -62,7 +80,8 @@ defmodule PhxMediaLibrary.CollectionTest do
           accepts: ~w(application/pdf),
           single_file: false,
           max_files: 5,
-          fallback_url: "/default.pdf"
+          fallback_url: "/default.pdf",
+          responsive: true
         )
 
       assert collection.name == :documents
@@ -71,6 +90,7 @@ defmodule PhxMediaLibrary.CollectionTest do
       assert collection.single_file == false
       assert collection.max_files == 5
       assert collection.fallback_url == "/default.pdf"
+      assert collection.responsive == true
     end
   end
 
@@ -85,6 +105,7 @@ defmodule PhxMediaLibrary.CollectionTest do
       assert Map.has_key?(collection, :max_files)
       assert Map.has_key?(collection, :fallback_url)
       assert Map.has_key?(collection, :fallback_path)
+      assert Map.has_key?(collection, :responsive)
     end
   end
 end

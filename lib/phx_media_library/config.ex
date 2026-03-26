@@ -106,11 +106,22 @@ defmodule PhxMediaLibrary.Config do
   end
 
   @doc """
-  Check if responsive images are enabled.
+  Check if responsive images are enabled globally.
   """
   def responsive_images_enabled? do
-    Keyword.get(responsive_images_config(), :enabled, true)
+    Keyword.get(responsive_images_config(), :enabled, false)
   end
+
+  @doc """
+  Check if responsive images should be generated for a specific collection.
+
+  Resolution order:
+  1. If the collection has an explicit `:responsive` setting, use it.
+  2. Otherwise, fall back to the global `responsive_images_enabled?()` setting.
+  """
+  def responsive_for_collection?(nil), do: responsive_images_enabled?()
+  def responsive_for_collection?(%{responsive: nil}), do: responsive_images_enabled?()
+  def responsive_for_collection?(%{responsive: value}) when is_boolean(value), do: value
 
   @doc """
   Get the widths to generate for responsive images.

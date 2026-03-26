@@ -62,7 +62,7 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   def generate(%{disk: _, file_name: _, uuid: _} = media, conversion \\ nil) do
     processor = Config.image_processor()
     storage = Config.storage_adapter(media.disk)
-    source_path = get_source_path(media, conversion)
+    {source_path, temp?} = get_source_path(media, conversion)
 
     with {:ok, image} <- processor.open(source_path),
          {:ok, {orig_width, orig_height}} <- processor.dimensions(image) do
@@ -80,7 +80,13 @@ defmodule PhxMediaLibrary.ResponsiveImages do
           processor
         )
 
+      if temp?, do: File.rm(source_path)
+
       {:ok, data}
+    else
+      error ->
+        if temp?, do: File.rm(source_path)
+        error
     end
   end
 
@@ -291,12 +297,29 @@ defmodule PhxMediaLibrary.ResponsiveImages do
     end
   end
 
-  defp get_source_path(media, nil) do
-    PathGenerator.full_path(media, nil)
-  end
-
+  # Obtains a local file path for the source media.
+  # For local disk storage, returns the existing filesystem path.
+  # For remote storage (S3, Memory, etc.), downloads to a temp file first.
+  # Returns `{path, temp?}` where `temp?` indicates if cleanup is needed.
   defp get_source_path(media, conversion) do
-    PathGenerator.full_path(media, conversion)
+    case PathGenerator.full_path(media, conversion) do
+      path when is_binary(path) ->
+        {path, false}
+
+      nil ->
+        storage = Config.storage_adapter(media.disk)
+        relative = PathGenerator.relative_path(media, conversion)
+
+        case StorageWrapper.get(storage, relative) do
+          {:ok, content} ->
+            temp = temp_file_path(relative)
+            File.write!(temp, content)
+            {temp, true}
+
+          {:error, _} ->
+            {nil, false}
+        end
+    end
   end
 
   defp temp_file_path(path) do

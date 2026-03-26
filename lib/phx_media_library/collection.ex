@@ -28,7 +28,8 @@ defmodule PhxMediaLibrary.Collection do
     :max_size,
     :fallback_url,
     :fallback_path,
-    :verify_content_type
+    :verify_content_type,
+    :responsive
   ]
 
   @type t :: %__MODULE__{
@@ -40,7 +41,8 @@ defmodule PhxMediaLibrary.Collection do
           max_size: pos_integer() | nil,
           fallback_url: String.t() | nil,
           fallback_path: String.t() | nil,
-          verify_content_type: boolean()
+          verify_content_type: boolean(),
+          responsive: boolean() | nil
         }
 
   @doc """
@@ -56,6 +58,7 @@ defmodule PhxMediaLibrary.Collection do
   - `:fallback_url` - URL when collection is empty
   - `:fallback_path` - Path when collection is empty
   - `:verify_content_type` - Verify file content matches declared MIME type (default: true)
+  - `:responsive` - Generate responsive image variants after conversions (default: nil, falls back to global config)
 
   ## Examples
 
@@ -82,7 +85,8 @@ defmodule PhxMediaLibrary.Collection do
       max_size: Keyword.get(opts, :max_size),
       fallback_url: Keyword.get(opts, :fallback_url),
       fallback_path: Keyword.get(opts, :fallback_path),
-      verify_content_type: Keyword.get(opts, :verify_content_type, true)
+      verify_content_type: Keyword.get(opts, :verify_content_type, true),
+      responsive: Keyword.get(opts, :responsive)
     }
   end
 end

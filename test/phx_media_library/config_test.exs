@@ -101,9 +101,36 @@ defmodule PhxMediaLibrary.ConfigTest do
       assert is_boolean(result)
     end
 
-    test "returns true by default" do
-      # Default should be enabled
+    test "returns value from config" do
+      # config/config.exs sets enabled: true; code default is false
       assert Config.responsive_images_enabled?() == true
+    end
+  end
+
+  describe "responsive_for_collection?/1" do
+    test "falls back to global default when collection is nil" do
+      assert Config.responsive_for_collection?(nil) == Config.responsive_images_enabled?()
+    end
+
+    test "falls back to global default when collection responsive is nil" do
+      collection = %PhxMediaLibrary.Collection{name: :images, responsive: nil}
+      assert Config.responsive_for_collection?(collection) == Config.responsive_images_enabled?()
+    end
+
+    test "returns true when collection responsive is true" do
+      collection = %PhxMediaLibrary.Collection{name: :images, responsive: true}
+      assert Config.responsive_for_collection?(collection) == true
+    end
+
+    test "returns false when collection responsive is false" do
+      collection = %PhxMediaLibrary.Collection{name: :images, responsive: false}
+      assert Config.responsive_for_collection?(collection) == false
+    end
+
+    test "collection setting overrides global config" do
+      # Global is false by default, but collection says true
+      collection = %PhxMediaLibrary.Collection{name: :images, responsive: true}
+      assert Config.responsive_for_collection?(collection) == true
     end
   end
 

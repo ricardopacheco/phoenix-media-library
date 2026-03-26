@@ -670,6 +670,112 @@ defmodule PhxMediaLibrary.IntegrationTest do
   end
 
   # ---------------------------------------------------------------------------
+  # get_all_media_url
+  # ---------------------------------------------------------------------------
+
+  describe "get_all_media_url/3" do
+    test "returns all generated conversions with metadata" do
+      post = create_post!()
+
+      # Create media with generated_conversions already set
+      post =
+        Fixtures.create_media_in_jsonb(post, "images", %{
+          file_name: "photo.png",
+          mime_type: "image/png",
+          generated_conversions: %{"thumb" => true, "preview" => true, "banner" => true}
+        })
+
+      results = PhxMediaLibrary.get_all_media_url(post, :images)
+
+      assert length(results) == 3
+
+      Enum.each(results, fn entry ->
+        assert entry.type == "image/png"
+        assert is_atom(entry.name)
+        assert is_binary(entry.url)
+        assert Map.has_key?(entry, :width)
+        assert Map.has_key?(entry, :height)
+      end)
+
+      names = Enum.map(results, & &1.name)
+      assert :thumb in names
+      assert :preview in names
+      assert :banner in names
+    end
+
+    test "filters by specific conversion names" do
+      post = create_post!()
+
+      post =
+        Fixtures.create_media_in_jsonb(post, "images", %{
+          file_name: "photo.png",
+          mime_type: "image/png",
+          generated_conversions: %{"thumb" => true, "preview" => true, "banner" => true}
+        })
+
+      results = PhxMediaLibrary.get_all_media_url(post, :images, [:thumb, :banner])
+
+      assert length(results) == 2
+      names = Enum.map(results, & &1.name)
+      assert :thumb in names
+      assert :banner in names
+      refute :preview in names
+    end
+
+    test "returns empty list when no media in collection" do
+      post = create_post!()
+
+      assert PhxMediaLibrary.get_all_media_url(post, :images) == []
+    end
+
+    test "returns empty list when no generated conversions" do
+      post = create_post!()
+
+      post =
+        Fixtures.create_media_in_jsonb(post, "images", %{
+          file_name: "photo.png",
+          mime_type: "image/png",
+          generated_conversions: %{}
+        })
+
+      assert PhxMediaLibrary.get_all_media_url(post, :images) == []
+    end
+
+    test "skips conversions that are not true" do
+      post = create_post!()
+
+      post =
+        Fixtures.create_media_in_jsonb(post, "images", %{
+          file_name: "photo.png",
+          mime_type: "image/png",
+          generated_conversions: %{"thumb" => true, "preview" => false}
+        })
+
+      results = PhxMediaLibrary.get_all_media_url(post, :images)
+      assert length(results) == 1
+      assert hd(results).name == :thumb
+    end
+
+    test "includes width and height from conversion definitions" do
+      post = create_post!()
+
+      post =
+        Fixtures.create_media_in_jsonb(post, "images", %{
+          file_name: "photo.png",
+          mime_type: "image/png",
+          generated_conversions: %{"thumb" => true}
+        })
+
+      [entry] = PhxMediaLibrary.get_all_media_url(post, :images)
+
+      # TestPost defines :thumb as width: 150, height: 150
+      assert entry.name == :thumb
+      assert entry.width == 150
+      assert entry.height == 150
+    end
+  end
+
+  # ---------------------------------------------------------------------------
   # Clear operations
   # ---------------------------------------------------------------------------
 

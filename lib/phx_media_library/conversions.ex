@@ -15,6 +15,7 @@ defmodule PhxMediaLibrary.Conversions do
     MediaData,
     PathGenerator,
     ResponsiveImages,
+    StorageWrapper,
     Telemetry
   }
 
@@ -55,13 +56,14 @@ defmodule PhxMediaLibrary.Conversions do
         {:error, :media_item_not_found}
 
       item ->
-        original_path = PathGenerator.full_path(item, nil)
-
-        with {:ok, image} <- processor.open(original_path) do
+        with {:ok, source_path, temp?} <- fetch_source(item),
+             {:ok, image} <- processor.open(source_path) do
           results =
             Enum.map(conversions, fn conversion ->
               process_conversion(item, image, conversion, processor)
             end)
+
+          if temp?, do: File.rm(source_path)
 
           # Update generated_conversions in JSONB
           generated =
@@ -78,6 +80,9 @@ defmodule PhxMediaLibrary.Conversions do
           maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results)
 
           :ok
+        else
+          error ->
+            error
         end
     end
   end
@@ -138,9 +143,20 @@ defmodule PhxMediaLibrary.Conversions do
   end
 
   defp maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results) do
-    if Config.responsive_images_enabled?() do
+    collection_atom = safe_to_atom(collection_name)
+    collection_config = Helpers.collection_config(model, collection_atom)
+
+    if Config.responsive_for_collection?(collection_config) do
       generate_responsive_for_conversions(model, collection_name, item_uuid, results)
     end
+  end
+
+  defp safe_to_atom(value) when is_atom(value), do: value
+
+  defp safe_to_atom(value) when is_binary(value) do
+    String.to_existing_atom(value)
+  rescue
+    ArgumentError -> String.to_atom(value)
   end
 
   defp generate_responsive_for_conversions(model, collection_name, item_uuid, results) do
@@ -177,6 +193,30 @@ defmodule PhxMediaLibrary.Conversions do
     results
     |> Enum.filter(&match?({:ok, _}, &1))
     |> Enum.map(fn {:ok, name} -> name end)
+  end
+
+  # Obtains a local file path for the original media.
+  # For local disk storage, returns the existing filesystem path.
+  # For remote storage (S3, Memory, etc.), downloads to a temp file first.
+  defp fetch_source(item) do
+    case PathGenerator.full_path(item, nil) do
+      path when is_binary(path) ->
+        {:ok, path, false}
+
+      nil ->
+        storage = Config.storage_adapter(item.disk)
+        relative = PathGenerator.relative_path(item, nil)
+
+        case StorageWrapper.get(storage, relative) do
+          {:ok, content} ->
+            temp_path = temp_file_path(relative)
+            File.write!(temp_path, content)
+            {:ok, temp_path, true}
+
+          {:error, _} = error ->
+            error
+        end
+    end
   end
 
   defp temp_file_path(path) do

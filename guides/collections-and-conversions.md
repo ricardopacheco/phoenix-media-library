@@ -49,6 +49,7 @@ end
 | `:fallback_url` | `String.t()` | `nil` | URL returned when collection is empty |
 | `:fallback_path` | `String.t()` | `nil` | Filesystem path returned when collection is empty |
 | `:verify_content_type` | `boolean()` | `true` | Verify file content matches declared MIME type via magic bytes |
+| `:responsive` | `boolean()` | `nil` (global config) | Generate responsive image variants after conversions; overrides global `responsive_images: [enabled: ...]` setting |
 
 ### Content-Type Verification
 
