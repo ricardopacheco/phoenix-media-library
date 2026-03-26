@@ -6,19 +6,23 @@ defmodule PhxMediaLibrary.Helpers do
 
   # From get_owner_type/1 (duplicated in phx_media_library.ex, media_adder.ex, conversions.ex)
   def owner_type(model) do
-    if function_exported?(model.__struct__, :__media_type__, 0) do
-      model.__struct__.__media_type__()
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
+    if function_exported?(module, :__media_type__, 0) do
+      module.__media_type__()
     else
-      if function_exported?(model.__struct__, :__schema__, 1) do
-        model.__struct__.__schema__(:source)
+      if function_exported?(module, :__schema__, 1) do
+        module.__schema__(:source)
       else
-        model.__struct__ |> Module.split() |> List.last() |> Macro.underscore()
+        module |> Module.split() |> List.last() |> Macro.underscore()
       end
     end
   end
 
-  # Module-based variant (duplicated in 3 mix tasks as resolve_owner_type/1)
   def owner_type_for_module(module) do
+    Code.ensure_loaded(module)
+
     cond do
       function_exported?(module, :__media_type__, 0) -> module.__media_type__()
       function_exported?(module, :__schema__, 1) -> module.__schema__(:source)
@@ -26,10 +30,12 @@ defmodule PhxMediaLibrary.Helpers do
     end
   end
 
-  # From get_media_column/1 (duplicated in phx_media_library.ex, media_adder.ex, conversions.ex)
   def media_column(model) do
-    if function_exported?(model.__struct__, :__media_column__, 0) do
-      model.__struct__.__media_column__()
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
+    if function_exported?(module, :__media_column__, 0) do
+      module.__media_column__()
     else
       :media_data
     end
@@ -56,8 +62,11 @@ defmodule PhxMediaLibrary.Helpers do
 
   # From get_collection_config/2 (duplicated in phx_media_library.ex, media_adder.ex, live_upload.ex)
   def collection_config(model, collection_name) do
-    if function_exported?(model.__struct__, :get_media_collection, 1) do
-      model.__struct__.get_media_collection(collection_name)
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
+    if function_exported?(module, :get_media_collection, 1) do
+      module.get_media_collection(collection_name)
     else
       nil
     end

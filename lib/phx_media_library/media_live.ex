@@ -702,6 +702,7 @@ defmodule PhxMediaLibrary.MediaLive do
 
   defp get_collection_config(model, collection_name) do
     module = model.__struct__
+    Code.ensure_loaded(module)
 
     if function_exported?(module, :media_collections, 0) do
       module.media_collections()

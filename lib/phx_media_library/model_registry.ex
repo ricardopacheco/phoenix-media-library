@@ -78,6 +78,8 @@ defmodule PhxMediaLibrary.ModelRegistry do
   """
   @spec get_model_conversions(module(), atom()) :: [PhxMediaLibrary.Conversion.t()]
   def get_model_conversions(module, collection_name) do
+    Code.ensure_loaded(module)
+
     cond do
       function_exported?(module, :get_media_conversions, 1) ->
         module.get_media_conversions(collection_name)

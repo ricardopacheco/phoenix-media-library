@@ -95,6 +95,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Clean do
 
   defp discover_modules(model_string) do
     module = Module.concat([model_string])
+    Code.ensure_loaded(module)
 
     unless function_exported?(module, :__media_column__, 0) do
       Mix.shell().error("#{inspect(module)} does not export __media_column__/0")

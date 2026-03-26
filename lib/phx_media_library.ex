@@ -627,9 +627,12 @@ defmodule PhxMediaLibrary do
   end
 
   defp maybe_process_conversions(model, media_item, collection_name) do
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
     conversions =
-      if function_exported?(model.__struct__, :get_media_conversions, 1) do
-        model.__struct__.get_media_conversions(collection_name)
+      if function_exported?(module, :get_media_conversions, 1) do
+        module.get_media_conversions(collection_name)
       else
         []
       end

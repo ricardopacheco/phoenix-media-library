@@ -191,7 +191,11 @@ if Code.ensure_loaded?(Oban) do
       requested_atoms = Enum.map(conversion_names, &safe_to_atom/1)
       collection_atom = safe_to_atom(collection_name)
 
-      # Check if the module has any conversion definitions
+      # Ensure the module is loaded before checking for exported functions.
+      # Async processors run in separate processes where the module may not
+      # be loaded yet.
+      Code.ensure_loaded(owner_module)
+
       has_conversions? =
         function_exported?(owner_module, :get_media_conversions, 1) or
           function_exported?(owner_module, :media_conversions, 0)

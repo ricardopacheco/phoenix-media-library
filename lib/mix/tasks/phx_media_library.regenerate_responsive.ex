@@ -52,6 +52,8 @@ defmodule Mix.Tasks.PhxMediaLibrary.RegenerateResponsive do
     collection_filter = opts[:collection]
     dry_run? = opts[:dry_run] || false
 
+    Code.ensure_loaded(model_module)
+
     unless function_exported?(model_module, :__media_column__, 0) do
       Mix.shell().error("#{inspect(model_module)} does not export __media_column__/0")
       exit(:shutdown)
@@ -155,5 +157,4 @@ defmodule Mix.Tasks.PhxMediaLibrary.RegenerateResponsive do
     |> Ecto.Changeset.change(%{column => updated_data})
     |> repo.update!()
   end
-
 end

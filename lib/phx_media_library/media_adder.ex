@@ -551,8 +551,11 @@ defmodule PhxMediaLibrary.MediaAdder do
   defp generate_uuid, do: Ecto.UUID.generate()
 
   defp get_conversions_for(model, collection_name) do
-    if function_exported?(model.__struct__, :get_media_conversions, 1) do
-      model.__struct__.get_media_conversions(collection_name)
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
+    if function_exported?(module, :get_media_conversions, 1) do
+      module.get_media_conversions(collection_name)
     else
       []
     end
