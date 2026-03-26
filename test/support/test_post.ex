@@ -10,14 +10,7 @@ defmodule PhxMediaLibrary.TestPost do
   schema "posts" do
     field(:title, :string)
     field(:body, :string)
-
-    has_media()
-    has_media(:images)
-    has_media(:documents)
-    has_media(:avatar)
-    has_media(:gallery)
-    has_media(:small_files)
-    has_media(:unverified)
+    field(:media_data, :map, default: %{})
 
     timestamps(type: :utc_datetime)
   end

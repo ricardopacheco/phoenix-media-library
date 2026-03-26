@@ -3,7 +3,7 @@ defmodule PhxMediaLibrary.MediaAdder do
   Builder struct for adding media to a model.
 
   This module provides a fluent API for configuring media before
-  it is persisted to storage and the database.
+  it is persisted to storage and the model's JSONB column.
 
   You typically won't use this module directly - instead use the
   functions in `PhxMediaLibrary` which delegate here.
@@ -12,10 +12,14 @@ defmodule PhxMediaLibrary.MediaAdder do
   alias PhxMediaLibrary.{
     Collection,
     Config,
+    Helpers,
     Media,
+    MediaData,
+    MediaItem,
     MetadataExtractor,
     MimeDetector,
     PathGenerator,
+    ResponsiveImages,
     StorageWrapper,
     Telemetry
   }
@@ -100,9 +104,9 @@ defmodule PhxMediaLibrary.MediaAdder do
   end
 
   @doc """
-  Finalize and persist the media.
+  Finalize and persist the media to the model's JSONB column.
   """
-  @spec to_collection(t(), atom(), keyword()) :: {:ok, Media.t()} | {:error, term()}
+  @spec to_collection(t(), atom(), keyword()) :: {:ok, MediaItem.t()} | {:error, term()}
   def to_collection(%__MODULE__{} = adder, collection_name, opts \\ []) do
     telemetry_metadata = %{
       collection: collection_name,
@@ -117,11 +121,11 @@ defmodule PhxMediaLibrary.MediaAdder do
              {:ok, _validated} <- validate_collection(adder, collection_name, file_info),
              :ok <- maybe_verify_content_type(adder, collection_name, file_info, header),
              {:ok, metadata} <- maybe_extract_metadata(adder, file_info),
-             {:ok, media} <-
+             {:ok, media_item} <-
                store_and_persist(adder, collection_name, file_info, metadata, opts) do
           # Trigger async conversion processing
-          maybe_process_conversions(adder.model, media, collection_name)
-          {:ok, media}
+          maybe_process_conversions(adder.model, media_item, collection_name)
+          {:ok, media_item}
         end
 
       stop_metadata =
@@ -134,7 +138,8 @@ defmodule PhxMediaLibrary.MediaAdder do
     end)
   end
 
-  # Private functions
+  # ---------------------------------------------------------------------------
+  # Source resolution  # ---------------------------------------------------------------------------
 
   defp resolve_source(%__MODULE__{source: source, custom_filename: custom_filename}) do
     case source do
@@ -256,8 +261,11 @@ defmodule PhxMediaLibrary.MediaAdder do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # Validation  # ---------------------------------------------------------------------------
+
   defp validate_collection(%__MODULE__{model: model}, collection_name, file_info) do
-    case get_collection_config(model, collection_name) do
+    case Helpers.collection_config(model, collection_name) do
       nil ->
         # No explicit collection config - allow any file
         {:ok, :no_config}
@@ -296,10 +304,6 @@ defmodule PhxMediaLibrary.MediaAdder do
   # TAR signatures live at offset 257, so 512 bytes covers all known formats.
   @mime_header_size 512
 
-  # Read only the file header for MIME detection, avoiding loading the
-  # entire file into memory.  The header bytes are also used for
-  # content-type verification.  The rest of the file is streamed to
-  # storage later, with the checksum computed during the stream.
   defp read_and_detect_mime(file_info) do
     header = read_file_header(file_info.path, @mime_header_size)
     detected_mime = MimeDetector.detect_with_fallback(header, file_info.filename)
@@ -319,27 +323,21 @@ defmodule PhxMediaLibrary.MediaAdder do
     end
   end
 
-  # Verify that file content matches the declared MIME type, if the
-  # collection has `verify_content_type: true` (the default).
-  # `header` is the first @mime_header_size bytes — enough for magic-byte
-  # matching without needing the full file in memory.
   defp maybe_verify_content_type(
          %__MODULE__{model: model},
          collection_name,
          file_info,
          header
        ) do
-    case get_collection_config(model, collection_name) do
+    case Helpers.collection_config(model, collection_name) do
       %Collection{verify_content_type: false} ->
         :ok
 
       _ ->
-        # verify_content_type defaults to true when nil or true
         MimeDetector.verify(header, file_info.filename, file_info.mime_type)
     end
   end
 
-  # Extract metadata from the file if enabled
   defp maybe_extract_metadata(%__MODULE__{extract_metadata: false}, _file_info) do
     {:ok, %{}}
   end
@@ -356,11 +354,12 @@ defmodule PhxMediaLibrary.MediaAdder do
          opts
        ) do
     uuid = generate_uuid()
-    disk = opts[:disk] || adder.disk || get_default_disk(adder.model, collection_name)
+    disk = opts[:disk] || adder.disk || Helpers.default_disk(adder.model, collection_name)
     storage = Config.storage_adapter(disk)
+    owner_type = Helpers.owner_type(adder.model)
+    owner_id = to_string(adder.model.id)
 
-    # Build media attributes (checksum is computed during streaming below)
-    # Merge source URL into custom_properties if present
+    # Build custom properties (merge source URL if present)
     custom_props =
       case file_info do
         %{source_url: url} when is_binary(url) ->
@@ -370,58 +369,62 @@ defmodule PhxMediaLibrary.MediaAdder do
           adder.custom_properties
       end
 
-    attrs = %{
-      uuid: uuid,
-      collection_name: to_string(collection_name),
-      name: sanitize_name(file_info.filename),
-      file_name: file_info.filename,
-      mime_type: file_info.mime_type,
-      disk: to_string(disk),
-      size: file_info.size,
-      custom_properties: custom_props,
-      metadata: metadata,
-      mediable_type: get_mediable_type(adder.model),
-      mediable_id: adder.model.id,
-      order_column: get_next_order(adder.model, collection_name)
-    }
+    # Build the media item
+    media_item =
+      MediaItem.new(
+        uuid: uuid,
+        name: Helpers.sanitize_name(file_info.filename),
+        file_name: file_info.filename,
+        mime_type: file_info.mime_type,
+        disk: to_string(disk),
+        size: file_info.size,
+        custom_properties: custom_props,
+        metadata: metadata,
+        order: next_order(adder.model, collection_name),
+        inserted_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+        # Virtual fields for path generation
+        owner_type: owner_type,
+        owner_id: owner_id,
+        collection_name: to_string(collection_name)
+      )
 
     # Determine storage path
-    storage_path = PathGenerator.for_new_media(attrs)
+    storage_path = PathGenerator.for_new_media(media_item)
 
     # Stream file to storage while computing checksum in a single pass.
-    # This avoids loading the entire file into memory.
-    with {:ok, checksum} <- stream_and_checksum(storage, storage_path, file_info.path),
-         attrs = Map.merge(attrs, %{checksum: checksum, checksum_algorithm: "sha256"}),
-         {:ok, media} <- insert_media(attrs) do
-      # Handle single file collections
-      maybe_cleanup_collection(adder.model, collection_name, media)
+    with {:ok, checksum} <- stream_and_checksum(storage, storage_path, file_info.path) do
+      media_item = %{media_item | checksum: checksum, checksum_algorithm: "sha256"}
+
+      # Add item to model's JSONB column
+      updated_model =
+        Helpers.update_media_data(adder.model, fn data ->
+          MediaData.put_item(data, collection_name, media_item)
+        end)
+
+      # Handle single file / max_files constraints
+      maybe_cleanup_collection(updated_model, collection_name, media_item)
 
       # Generate responsive images if requested
-      media =
+      media_item =
         if adder.generate_responsive and image?(file_info.mime_type) do
-          generate_responsive_images(media)
+          generate_responsive_images(updated_model, collection_name, media_item)
         else
-          media
+          media_item
         end
 
       # Cleanup temp file if needed
       if file_info.temp, do: File.rm(file_info.path)
 
-      {:ok, media}
+      {:ok, media_item}
     end
   end
 
   # Stream a file to storage while computing its SHA-256 checksum in a
   # single pass.  Each chunk is fed to both the storage adapter (via a
   # checksumming stream wrapper) and the running hash state.
-  #
-  # The 64 KB chunk size balances memory usage and syscall overhead.
   @stream_chunk_size 64 * 1024
 
   defp stream_and_checksum(storage, storage_path, file_path) do
-    # We use a process dictionary key to thread the hash state through the
-    # stream because Enum.reduce inside a stream is not composable with
-    # StorageWrapper.put which expects {:stream, enumerable}.
     hash_key = {__MODULE__, :hash_state, make_ref()}
 
     Process.put(hash_key, :crypto.hash_init(:sha256))
@@ -458,120 +461,100 @@ defmodule PhxMediaLibrary.MediaAdder do
     String.starts_with?(mime_type, "image/")
   end
 
-  defp generate_responsive_images(media) do
-    case PhxMediaLibrary.ResponsiveImages.generate(media, nil) do
+  defp generate_responsive_images(model, collection_name, media_item) do
+    case ResponsiveImages.generate(media_item, nil) do
       {:ok, responsive_data} ->
-        {:ok, updated} =
-          media
-          |> Ecto.Changeset.change(responsive_images: responsive_data)
-          |> Config.repo().update()
+        updated_item = %{media_item | responsive_images: responsive_data}
 
-        updated
+        Helpers.update_media_data(model, fn data ->
+          MediaData.update_item(data, collection_name, media_item.uuid, fn _item ->
+            updated_item
+          end)
+        end)
+
+        updated_item
 
       {:error, _reason} ->
         # Log error but don't fail the upload
-        media
+        media_item
     end
   end
 
-  defp insert_media(attrs) do
-    %Media{}
-    |> Media.changeset(attrs)
-    |> Config.repo().insert()
-  end
-
-  defp maybe_process_conversions(model, media, collection_name) do
+  defp maybe_process_conversions(model, media_item, collection_name) do
     conversions = get_conversions_for(model, collection_name)
 
     if conversions != [] do
-      Config.async_processor().process_async(media, conversions)
+      # Pass context for the async processor to locate the media item
+      context = %{
+        owner_module: model.__struct__,
+        owner_id: model.id,
+        collection_name: to_string(collection_name),
+        item_uuid: media_item.uuid
+      }
+
+      Config.async_processor().process_async(context, conversions)
     end
   end
 
-  # Helper functions
+  defp next_order(model, collection_name) do
+    data = Helpers.media_data(model)
+    MediaData.count(data, collection_name)
+  end
+
+  defp maybe_cleanup_collection(model, collection_name, new_item) do
+    excess_items =
+      case Helpers.collection_config(model, collection_name) do
+        %Collection{single_file: true} ->
+          model
+          |> Helpers.media_data()
+          |> MediaData.get_collection(collection_name,
+            owner_type: new_item.owner_type,
+            owner_id: new_item.owner_id
+          )
+          |> Enum.reject(&(&1.uuid == new_item.uuid))
+
+        %Collection{max_files: max} when is_integer(max) ->
+          items =
+            model
+            |> Helpers.media_data()
+            |> MediaData.get_collection(collection_name,
+              owner_type: new_item.owner_type,
+              owner_id: new_item.owner_id
+            )
+
+          if length(items) > max do
+            Enum.take(items, length(items) - max)
+          else
+            []
+          end
+
+        _ ->
+          []
+      end
+
+    if excess_items != [] do
+      # Delete files from storage for all excess items
+      Enum.each(excess_items, &Media.delete_files/1)
+
+      # Single DB write: remove all excess items from JSONB at once
+      uuids_to_remove = Enum.map(excess_items, & &1.uuid)
+
+      Helpers.update_media_data(model, fn data ->
+        Enum.reduce(uuids_to_remove, data, fn uuid, acc ->
+          {_removed, updated} = MediaData.remove_item(acc, collection_name, uuid)
+          updated
+        end)
+      end)
+    end
+  end
 
   defp generate_uuid, do: Ecto.UUID.generate()
-
-  defp sanitize_name(filename) do
-    filename
-    |> Path.rootname()
-    |> String.downcase()
-    |> String.replace(~r/[^a-z0-9_-]/, "-")
-    |> String.replace(~r/-+/, "-")
-    |> String.trim("-")
-  end
-
-  defp get_mediable_type(model) do
-    if function_exported?(model.__struct__, :__media_type__, 0) do
-      model.__struct__.__media_type__()
-    else
-      # Fallback for schemas that don't `use PhxMediaLibrary.HasMedia`:
-      # derive from Ecto table name if available, otherwise fall back to
-      # underscored module name (without naive pluralization).
-      if function_exported?(model.__struct__, :__schema__, 1) do
-        model.__struct__.__schema__(:source)
-      else
-        model.__struct__
-        |> Module.split()
-        |> List.last()
-        |> Macro.underscore()
-      end
-    end
-  end
-
-  defp get_collection_config(model, collection_name) do
-    if function_exported?(model.__struct__, :get_media_collection, 1) do
-      model.__struct__.get_media_collection(collection_name)
-    end
-  end
 
   defp get_conversions_for(model, collection_name) do
     if function_exported?(model.__struct__, :get_media_conversions, 1) do
       model.__struct__.get_media_conversions(collection_name)
     else
       []
-    end
-  end
-
-  defp get_default_disk(model, collection_name) do
-    case get_collection_config(model, collection_name) do
-      %Collection{disk: disk} when not is_nil(disk) -> disk
-      _ -> Config.default_disk()
-    end
-  end
-
-  defp get_next_order(model, collection_name) do
-    # Get highest order_column and add 1
-    model
-    |> Media.for_model(collection_name)
-    |> Enum.map(& &1.order_column)
-    |> Enum.max(fn -> 0 end)
-    |> Kernel.+(1)
-  end
-
-  defp maybe_cleanup_collection(model, collection_name, new_media) do
-    case get_collection_config(model, collection_name) do
-      %Collection{single_file: true} ->
-        model
-        |> Media.for_model(collection_name)
-        |> Enum.reject(&(&1.id == new_media.id))
-        |> Enum.each(&Media.delete/1)
-
-      %Collection{max_files: max} when is_integer(max) ->
-        all_media = Media.for_model(model, collection_name)
-
-        if length(all_media) > max do
-          # Items are ordered by order_column ASC (oldest first).
-          # Keep the newest `max` items, delete the oldest excess.
-          excess_count = length(all_media) - max
-
-          all_media
-          |> Enum.take(excess_count)
-          |> Enum.each(&Media.delete/1)
-        end
-
-      _ ->
-        :ok
     end
   end
 

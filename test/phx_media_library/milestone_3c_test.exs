@@ -1,9 +1,11 @@
 defmodule PhxMediaLibrary.Milestone3cTest do
   @moduledoc """
-  Tests for Milestone 3c — Soft Deletes, Streaming Uploads, and Presigned Upload API.
+  Tests for Milestone 3c — Streaming Uploads and Presigned Upload API.
 
-  Split into three major describe blocks matching the sub-milestones:
-    3.5 — Soft Deletes
+  Soft delete tests have been removed as media-level soft deletes no longer
+  exist in the JSONB approach.
+
+  Split into two major describe blocks matching the sub-milestones:
     3.6 — Streaming Upload Support
     3.7 — Direct S3 Upload (Presigned URLs)
   """
@@ -13,7 +15,6 @@ defmodule PhxMediaLibrary.Milestone3cTest do
   @moduletag :db
 
   alias PhxMediaLibrary.Config
-  alias PhxMediaLibrary.Media
   alias PhxMediaLibrary.PathGenerator
   alias PhxMediaLibrary.Storage
   alias PhxMediaLibrary.StorageWrapper
@@ -23,8 +24,12 @@ defmodule PhxMediaLibrary.Milestone3cTest do
   # ---------------------------------------------------------------------------
 
   defp create_post!(attrs \\ %{}) do
-    default = %{id: Ecto.UUID.generate(), title: "Test Post"}
-    struct!(PhxMediaLibrary.TestPost, Map.merge(default, attrs))
+    default = %{title: "Test Post"}
+    merged = Map.merge(default, attrs)
+
+    %PhxMediaLibrary.TestPost{}
+    |> Ecto.Changeset.change(Map.take(merged, [:title]))
+    |> TestRepo.insert!()
   end
 
   defp create_temp_file(content, filename) do
@@ -72,21 +77,6 @@ defmodule PhxMediaLibrary.Milestone3cTest do
     %{storage_dir: dir}
   end
 
-  defp enable_soft_deletes(_context) do
-    Application.put_env(:phx_media_library, :soft_deletes, true)
-
-    on_exit(fn ->
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-    end)
-
-    :ok
-  end
-
-  defp disable_soft_deletes(_context) do
-    Application.put_env(:phx_media_library, :soft_deletes, false)
-    :ok
-  end
-
   defp add_media_to_post!(post, collection, filename, content) do
     path = create_temp_file(content, filename)
 
@@ -96,468 +86,6 @@ defmodule PhxMediaLibrary.Milestone3cTest do
       |> PhxMediaLibrary.to_collection(collection)
 
     media
-  end
-
-  # =========================================================================
-  # 3.5 — Soft Deletes
-  # =========================================================================
-
-  describe "soft deletes: configuration" do
-    test "soft_deletes_enabled?/0 defaults to false" do
-      Application.delete_env(:phx_media_library, :soft_deletes)
-      refute Media.soft_deletes_enabled?()
-    end
-
-    test "soft_deletes_enabled?/0 returns true when configured" do
-      Application.put_env(:phx_media_library, :soft_deletes, true)
-      assert Media.soft_deletes_enabled?()
-    after
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-    end
-
-    test "soft_deletes_enabled?/0 returns false when explicitly disabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-      refute Media.soft_deletes_enabled?()
-    end
-  end
-
-  describe "soft deletes: trashed?/1" do
-    test "returns false for media without deleted_at" do
-      media = %Media{deleted_at: nil}
-      refute PhxMediaLibrary.trashed?(media)
-    end
-
-    test "returns true for media with deleted_at set" do
-      media = %Media{deleted_at: ~U[2026-01-01 00:00:00Z]}
-      assert PhxMediaLibrary.trashed?(media)
-    end
-  end
-
-  describe "soft deletes: soft_delete/1 and restore/1" do
-    setup [:setup_disk_storage]
-
-    test "soft_delete/1 sets deleted_at timestamp" do
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "hello")
-
-      assert is_nil(media.deleted_at)
-
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      assert %DateTime{} = trashed.deleted_at
-      assert PhxMediaLibrary.trashed?(trashed)
-    end
-
-    test "soft_delete/1 persists to database" do
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "hello")
-
-      {:ok, _trashed} = PhxMediaLibrary.soft_delete(media)
-
-      reloaded = TestRepo.get!(Media, media.id)
-      assert %DateTime{} = reloaded.deleted_at
-    end
-
-    test "restore/1 clears deleted_at" do
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "hello")
-
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      assert PhxMediaLibrary.trashed?(trashed)
-
-      {:ok, restored} = PhxMediaLibrary.restore(trashed)
-      assert is_nil(restored.deleted_at)
-      refute PhxMediaLibrary.trashed?(restored)
-    end
-
-    test "restore/1 persists to database" do
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "hello")
-
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      {:ok, _restored} = PhxMediaLibrary.restore(trashed)
-
-      reloaded = TestRepo.get!(Media, media.id)
-      assert is_nil(reloaded.deleted_at)
-    end
-  end
-
-  describe "soft deletes: delete/1 respects config" do
-    setup [:setup_disk_storage]
-
-    test "delete/1 performs hard delete when soft_deletes disabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "gone forever")
-
-      assert :ok = PhxMediaLibrary.delete(media)
-      assert is_nil(TestRepo.get(Media, media.id))
-    end
-
-    test "delete/1 performs soft delete when soft_deletes enabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, true)
-
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "soft gone")
-
-      {:ok, trashed} = PhxMediaLibrary.delete(media)
-      assert %DateTime{} = trashed.deleted_at
-
-      # Record still exists in DB
-      reloaded = TestRepo.get!(Media, media.id)
-      assert %DateTime{} = reloaded.deleted_at
-    after
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-    end
-
-    test "permanently_delete/1 hard-deletes even when soft_deletes enabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, true)
-
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "test.txt", "hard gone")
-
-      assert :ok = PhxMediaLibrary.permanently_delete(media)
-      assert is_nil(TestRepo.get(Media, media.id))
-    after
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-    end
-  end
-
-  describe "soft deletes: query scoping" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "get_media/2 excludes soft-deleted items" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "visible.txt", "visible")
-      m2 = add_media_to_post!(post, :images, "trashed.txt", "trashed")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(m2)
-
-      media = PhxMediaLibrary.get_media(post, :images)
-      ids = Enum.map(media, & &1.id)
-      assert m1.id in ids
-      refute m2.id in ids
-    end
-
-    test "get_first_media/2 skips soft-deleted items" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "first.txt", "first")
-      m2 = add_media_to_post!(post, :images, "second.txt", "second")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(m1)
-
-      first = PhxMediaLibrary.get_first_media(post, :images)
-      assert first.id == m2.id
-    end
-
-    test "media_query/2 excludes soft-deleted items" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "a.txt", "a")
-      m2 = add_media_to_post!(post, :images, "b.txt", "b")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(m1)
-
-      results = PhxMediaLibrary.media_query(post, :images) |> TestRepo.all()
-      ids = Enum.map(results, & &1.id)
-      refute m1.id in ids
-      assert m2.id in ids
-    end
-
-    test "get_media/2 returns all items when soft_deletes is disabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "a.txt", "a")
-      m2 = add_media_to_post!(post, :images, "b.txt", "b")
-
-      # Manually set deleted_at on m2 without going through the soft_delete API
-      m2
-      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now() |> DateTime.truncate(:second))
-      |> TestRepo.update!()
-
-      media = PhxMediaLibrary.get_media(post, :images)
-      ids = Enum.map(media, & &1.id)
-
-      # When soft_deletes config is off, no filtering happens
-      assert m1.id in ids
-      assert m2.id in ids
-    end
-  end
-
-  describe "soft deletes: get_trashed_media/2" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "returns only soft-deleted items" do
-      post = create_post!()
-      _visible = add_media_to_post!(post, :images, "visible.txt", "visible")
-      trashable = add_media_to_post!(post, :images, "trash.txt", "trash")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(trashable)
-
-      trashed = PhxMediaLibrary.get_trashed_media(post, :images)
-      assert length(trashed) == 1
-      assert hd(trashed).id == trashable.id
-    end
-
-    test "returns empty list when no trashed items exist" do
-      post = create_post!()
-      _m = add_media_to_post!(post, :images, "alive.txt", "alive")
-
-      assert [] == PhxMediaLibrary.get_trashed_media(post, :images)
-    end
-
-    test "returns trashed items across all collections when no collection specified" do
-      post = create_post!()
-      img = add_media_to_post!(post, :images, "img.txt", "img")
-      doc = add_media_to_post!(post, :documents, "doc.txt", "doc")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(img)
-      {:ok, _} = PhxMediaLibrary.soft_delete(doc)
-
-      trashed = PhxMediaLibrary.get_trashed_media(post)
-      assert length(trashed) == 2
-    end
-  end
-
-  describe "soft deletes: purge_trashed/2" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "permanently deletes all trashed items for a model" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "a.txt", "a")
-      m2 = add_media_to_post!(post, :images, "b.txt", "b")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(m1)
-      {:ok, _} = PhxMediaLibrary.soft_delete(m2)
-
-      {:ok, count} = PhxMediaLibrary.purge_trashed(post)
-      assert count == 2
-
-      assert is_nil(TestRepo.get(Media, m1.id))
-      assert is_nil(TestRepo.get(Media, m2.id))
-    end
-
-    test "purge_trashed with :before option only deletes items older than cutoff" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "old.txt", "old")
-      m2 = add_media_to_post!(post, :images, "new.txt", "new")
-
-      # Soft-delete both
-      {:ok, _} = PhxMediaLibrary.soft_delete(m1)
-      {:ok, _} = PhxMediaLibrary.soft_delete(m2)
-
-      # Backdate m1's deleted_at to 60 days ago
-      old_date = DateTime.utc_now() |> DateTime.add(-60, :day) |> DateTime.truncate(:second)
-
-      TestRepo.get!(Media, m1.id)
-      |> Ecto.Changeset.change(deleted_at: old_date)
-      |> TestRepo.update!()
-
-      # Purge items deleted more than 30 days ago
-      cutoff = DateTime.utc_now() |> DateTime.add(-30, :day) |> DateTime.truncate(:second)
-      {:ok, count} = PhxMediaLibrary.purge_trashed(post, before: cutoff)
-
-      assert count == 1
-      assert is_nil(TestRepo.get(Media, m1.id))
-      # m2 was recently trashed, so it's still there
-      assert %Media{} = TestRepo.get(Media, m2.id)
-    end
-
-    test "purge_trashed does not affect non-trashed items" do
-      post = create_post!()
-      alive = add_media_to_post!(post, :images, "alive.txt", "alive")
-      dead = add_media_to_post!(post, :images, "dead.txt", "dead")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(dead)
-
-      {:ok, count} = PhxMediaLibrary.purge_trashed(post)
-      assert count == 1
-      assert %Media{} = TestRepo.get(Media, alive.id)
-    end
-
-    test "purge_trashed returns {:ok, 0} when no trashed items" do
-      post = create_post!()
-      _alive = add_media_to_post!(post, :images, "alive.txt", "alive")
-
-      {:ok, count} = PhxMediaLibrary.purge_trashed(post)
-      assert count == 0
-    end
-
-    test "purge_trashed deletes files from storage" do
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "file.txt", "file contents")
-
-      # Verify file exists
-      storage = Config.storage_adapter(media.disk)
-      storage_path = PathGenerator.relative_path(media, nil)
-      assert StorageWrapper.exists?(storage, storage_path)
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(media)
-
-      # File should still exist after soft delete
-      assert StorageWrapper.exists?(storage, storage_path)
-
-      # After purge, file should be gone
-      {:ok, 1} = PhxMediaLibrary.purge_trashed(post)
-      refute StorageWrapper.exists?(storage, storage_path)
-    end
-  end
-
-  describe "soft deletes: clear_collection/2 with soft deletes" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "soft-deletes items instead of hard-deleting" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "a.txt", "a")
-      m2 = add_media_to_post!(post, :images, "b.txt", "b")
-
-      {:ok, count} = PhxMediaLibrary.clear_collection(post, :images)
-      assert count == 2
-
-      # Records still exist but are trashed
-      reloaded1 = TestRepo.get!(Media, m1.id)
-      reloaded2 = TestRepo.get!(Media, m2.id)
-      assert %DateTime{} = reloaded1.deleted_at
-      assert %DateTime{} = reloaded2.deleted_at
-
-      # get_media should return empty
-      assert [] == PhxMediaLibrary.get_media(post, :images)
-
-      # get_trashed_media should return them
-      assert length(PhxMediaLibrary.get_trashed_media(post, :images)) == 2
-    end
-
-    test "does not delete files from storage on soft clear" do
-      post = create_post!()
-      media = add_media_to_post!(post, :images, "file.txt", "contents")
-
-      storage = Config.storage_adapter(media.disk)
-      storage_path = PathGenerator.relative_path(media, nil)
-
-      {:ok, _} = PhxMediaLibrary.clear_collection(post, :images)
-
-      # File should still be on disk
-      assert StorageWrapper.exists?(storage, storage_path)
-    end
-  end
-
-  describe "soft deletes: clear_media/1 with soft deletes" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "soft-deletes all media for model" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "img.txt", "img")
-      m2 = add_media_to_post!(post, :documents, "doc.txt", "doc")
-
-      {:ok, count} = PhxMediaLibrary.clear_media(post)
-      assert count == 2
-
-      assert [] == PhxMediaLibrary.get_media(post)
-      assert length(PhxMediaLibrary.get_trashed_media(post)) == 2
-
-      r1 = TestRepo.get!(Media, m1.id)
-      r2 = TestRepo.get!(Media, m2.id)
-      assert %DateTime{} = r1.deleted_at
-      assert %DateTime{} = r2.deleted_at
-    end
-  end
-
-  describe "soft deletes: clear_collection/2 without soft deletes" do
-    setup [:setup_disk_storage, :disable_soft_deletes]
-
-    test "hard-deletes items as before" do
-      post = create_post!()
-      m1 = add_media_to_post!(post, :images, "a.txt", "a")
-      _m2 = add_media_to_post!(post, :images, "b.txt", "b")
-
-      {:ok, count} = PhxMediaLibrary.clear_collection(post, :images)
-      assert count == 2
-
-      assert is_nil(TestRepo.get(Media, m1.id))
-    end
-  end
-
-  describe "soft deletes: deleted_at schema field" do
-    test "Media schema has deleted_at field" do
-      media = %Media{}
-      assert is_nil(media.deleted_at)
-    end
-
-    test "deleted_at is included in optional changeset fields" do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      changeset =
-        Media.changeset(%Media{}, %{
-          uuid: Ecto.UUID.generate(),
-          collection_name: "test",
-          name: "test",
-          file_name: "test.txt",
-          mime_type: "text/plain",
-          disk: "memory",
-          size: 100,
-          mediable_type: "posts",
-          mediable_id: Ecto.UUID.generate(),
-          deleted_at: now
-        })
-
-      assert Ecto.Changeset.get_field(changeset, :deleted_at) == now
-    end
-  end
-
-  describe "soft deletes: exclude_trashed/1 and only_trashed/1" do
-    setup [:setup_disk_storage]
-
-    test "exclude_trashed filters out soft-deleted items when enabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, true)
-
-      post = create_post!()
-      _m1 = add_media_to_post!(post, :images, "alive.txt", "alive")
-      m2 = add_media_to_post!(post, :images, "dead.txt", "dead")
-
-      {:ok, _} = PhxMediaLibrary.soft_delete(m2)
-
-      query = Ecto.Query.from(m in Media)
-      filtered = Media.exclude_trashed(query) |> TestRepo.all()
-      ids = Enum.map(filtered, & &1.id)
-      refute m2.id in ids
-    after
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-    end
-
-    test "exclude_trashed is a no-op when soft deletes disabled" do
-      Application.put_env(:phx_media_library, :soft_deletes, false)
-
-      post = create_post!()
-      _m1 = add_media_to_post!(post, :images, "alive.txt", "alive")
-      m2 = add_media_to_post!(post, :images, "dead.txt", "dead")
-
-      # Manually set deleted_at
-      m2
-      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now() |> DateTime.truncate(:second))
-      |> TestRepo.update!()
-
-      query = Ecto.Query.from(m in Media)
-      all = Media.exclude_trashed(query) |> TestRepo.all()
-      ids = Enum.map(all, & &1.id)
-      # Not filtered because soft deletes disabled
-      assert m2.id in ids
-    end
-
-    test "only_trashed returns only soft-deleted items" do
-      post = create_post!()
-      _m1 = add_media_to_post!(post, :images, "alive.txt", "alive")
-      m2 = add_media_to_post!(post, :images, "dead.txt", "dead")
-
-      m2
-      |> Ecto.Changeset.change(deleted_at: DateTime.utc_now() |> DateTime.truncate(:second))
-      |> TestRepo.update!()
-
-      query = Ecto.Query.from(m in Media)
-      trashed = Media.only_trashed(query) |> TestRepo.all()
-      ids = Enum.map(trashed, & &1.id)
-      assert m2.id in ids
-      assert length(trashed) == 1
-    end
   end
 
   # =========================================================================
@@ -846,7 +374,7 @@ defmodule PhxMediaLibrary.Milestone3cTest do
       post = create_post!()
 
       # Simulate a completed external upload — the file is already in storage,
-      # we just need to create the DB record.
+      # we just need to create the record.
       storage_path = "posts/#{post.id}/#{Ecto.UUID.generate()}/photo.jpg"
 
       {:ok, media} =
@@ -860,7 +388,7 @@ defmodule PhxMediaLibrary.Milestone3cTest do
       assert media.mime_type == "image/jpeg"
       assert media.size == 45_000
       assert media.collection_name == "images"
-      assert media.mediable_id == post.id
+      assert media.owner_id == to_string(post.id)
     end
 
     test "stores custom properties" do
@@ -925,10 +453,12 @@ defmodule PhxMediaLibrary.Milestone3cTest do
       assert media.uuid == uuid
     end
 
-    test "assigns correct order_column" do
+    test "assigns correct order" do
       post = create_post!()
       _m1 = add_media_to_post!(post, :images, "first.txt", "first")
 
+      # Reload to get updated JSONB
+      post = PhxMediaLibrary.TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       storage_path = "posts/#{post.id}/#{Ecto.UUID.generate()}/second.txt"
 
       {:ok, media} =
@@ -938,7 +468,7 @@ defmodule PhxMediaLibrary.Milestone3cTest do
           size: 100
         )
 
-      assert media.order_column == 2
+      assert media.order == 1
     end
 
     test "metadata defaults to empty map" do
@@ -1012,28 +542,6 @@ defmodule PhxMediaLibrary.Milestone3cTest do
     end
   end
 
-  describe "presigned uploads: complete_external_upload with soft deletes" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "respects soft delete on subsequent operations" do
-      post = create_post!()
-      storage_path = "posts/#{post.id}/#{Ecto.UUID.generate()}/ext.txt"
-
-      {:ok, media} =
-        PhxMediaLibrary.complete_external_upload(post, :images, storage_path,
-          filename: "ext.txt",
-          content_type: "text/plain",
-          size: 10
-        )
-
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      assert PhxMediaLibrary.trashed?(trashed)
-
-      # Should be excluded from queries
-      assert [] == PhxMediaLibrary.get_media(post, :images)
-    end
-  end
-
   # =========================================================================
   # Storage behaviour: presigned_upload_url callback
   # =========================================================================
@@ -1065,56 +573,5 @@ defmodule PhxMediaLibrary.Milestone3cTest do
       assert {:error, :not_supported} =
                StorageWrapper.presigned_upload_url(storage, "test/path.txt")
     end
-  end
-
-  # =========================================================================
-  # Combined features: soft deletes + streaming
-  # =========================================================================
-
-  describe "combined: soft delete after streamed upload" do
-    setup [:setup_disk_storage, :enable_soft_deletes]
-
-    test "full lifecycle: stream upload → soft delete → restore → purge" do
-      post = create_post!()
-      content = "full lifecycle test with streaming and soft deletes"
-      path = create_temp_file(content, "lifecycle.txt")
-
-      # 1. Upload via streaming
-      {:ok, media} =
-        post
-        |> PhxMediaLibrary.add(path)
-        |> PhxMediaLibrary.to_collection(:images)
-
-      assert media.checksum != nil
-      assert [^media] = PhxMediaLibrary.get_media(post, :images) |> strip_preloads()
-
-      # 2. Soft delete
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      assert PhxMediaLibrary.trashed?(trashed)
-      assert [] == PhxMediaLibrary.get_media(post, :images)
-
-      # File still on disk
-      storage = Config.storage_adapter(media.disk)
-      storage_path = PathGenerator.relative_path(media, nil)
-      assert StorageWrapper.exists?(storage, storage_path)
-
-      # 3. Restore
-      {:ok, restored} = PhxMediaLibrary.restore(trashed)
-      refute PhxMediaLibrary.trashed?(restored)
-      assert [_] = PhxMediaLibrary.get_media(post, :images)
-
-      # 4. Soft delete again and purge
-      {:ok, _} = PhxMediaLibrary.soft_delete(restored)
-      {:ok, 1} = PhxMediaLibrary.purge_trashed(post)
-
-      # Record and file both gone
-      assert is_nil(TestRepo.get(Media, media.id))
-      refute StorageWrapper.exists?(storage, storage_path)
-    end
-  end
-
-  # Strip Ecto preloads for comparison
-  defp strip_preloads(media_list) do
-    Enum.map(media_list, fn m -> %{m | __meta__: m.__meta__} end)
   end
 end

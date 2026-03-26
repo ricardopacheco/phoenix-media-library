@@ -1,71 +1,68 @@
 defmodule PhxMediaLibrary do
   @moduledoc """
-  A robust, Ecto-backed media management library for Elixir and Phoenix.
+  A robust media management library for Elixir and Phoenix.
 
-  PhxMediaLibrary provides a simple, fluent API for:
-  - Associating files with Ecto schemas
-  - Organizing media into collections
-  - Storing files across different storage backends (local, S3)
-  - Generating image conversions (thumbnails, etc.)
-  - Creating responsive images for optimal loading
+  PhxMediaLibrary stores media metadata in JSONB columns on your Ecto schemas,
+  eliminating the need for a separate `media` table and improving read
+  performance. Each schema that needs media declares a `:map` field and the
+  library handles storage, conversions, and responsive images.
 
   ## Quick Start
 
-  1. Add `use PhxMediaLibrary.HasMedia` to your Ecto schema
-  2. Run `mix phx_media_library.install` to generate the migration
-  3. Start associating media with your models!
-
-  ## Example
-
-      # In your schema
+      # 1. Schema setup
       defmodule MyApp.Post do
         use Ecto.Schema
         use PhxMediaLibrary.HasMedia
 
         schema "posts" do
           field :title, :string
-          has_media()
+          field :media_data, :map, default: %{}
           timestamps()
         end
 
-        def media_collections do
-          [
-            collection(:images),
-            collection(:documents, accepts: ~w(application/pdf)),
-            collection(:avatar, single_file: true)
-          ]
-        end
-
-        def media_conversions do
-          [
-            conversion(:thumb, width: 150, height: 150, fit: :cover),
-            conversion(:preview, width: 800)
-          ]
+        media_collections do
+          collection :images, max_files: 20 do
+            convert :thumb, width: 150, height: 150, fit: :cover
+          end
         end
       end
 
-      # Adding media
-      post
-      |> PhxMediaLibrary.add("/path/to/image.jpg")
-      |> PhxMediaLibrary.to_collection(:images)
+      # 2. Adding media
+      {:ok, item} =
+        post
+        |> PhxMediaLibrary.add("/path/to/image.jpg")
+        |> PhxMediaLibrary.to_collection(:images)
 
-      # Retrieving media
-      PhxMediaLibrary.get_first_media_url(post, :images)
+      # 3. Retrieving
+      PhxMediaLibrary.get_media(post, :images)           # all items
+      PhxMediaLibrary.get_first_media_url(post, :images)  # URL of first
       PhxMediaLibrary.get_first_media_url(post, :images, :thumb)
+
+      # 4. Deleting
+      PhxMediaLibrary.delete_media(post, :images, item.uuid)
+      PhxMediaLibrary.clear_collection(post, :images)
+
+      # 5. Reordering
+      PhxMediaLibrary.reorder(post, :images, [uuid3, uuid1, uuid2])
 
   """
 
   alias PhxMediaLibrary.{
     Config,
     Error,
+    Helpers,
     Media,
     MediaAdder,
+    MediaData,
+    MediaItem,
     PathGenerator,
     StorageWrapper,
     Telemetry
   }
 
-  import Ecto.Query, only: [from: 2, where: 3, exclude: 2]
+  # ---------------------------------------------------------------------------
+  # Fluent Builder API
+  # ---------------------------------------------------------------------------
 
   @doc """
   Start adding media to a model from a file path or upload.
@@ -88,30 +85,16 @@ defmodule PhxMediaLibrary do
   @doc """
   Add media from a remote URL.
 
-  The file will be downloaded and stored locally before processing.
-  URL validation ensures only `http` and `https` schemes are accepted.
-
   ## Options
 
-  - `:headers` — custom request headers (e.g. `[{"Authorization", "Bearer token"}]`)
+  - `:headers` — custom request headers
   - `:timeout` — download timeout in milliseconds
-
-  ## Telemetry
-
-  Downloads emit `[:phx_media_library, :download, :start | :stop | :exception]`
-  events with URL, size, and MIME type metadata.
 
   ## Examples
 
       post
       |> PhxMediaLibrary.add_from_url("https://example.com/image.jpg")
       |> PhxMediaLibrary.to_collection(:images)
-
-      # With authentication
-      post
-      |> PhxMediaLibrary.add_from_url("https://api.example.com/file.pdf",
-           headers: [{"Authorization", "Bearer my-token"}])
-      |> PhxMediaLibrary.to_collection(:documents)
 
   """
   @spec add_from_url(Ecto.Schema.t(), String.t(), keyword()) :: MediaAdder.t()
@@ -142,17 +125,6 @@ defmodule PhxMediaLibrary do
 
   @doc """
   Disable automatic metadata extraction for this media.
-
-  By default, PhxMediaLibrary extracts metadata (dimensions, EXIF, etc.)
-  from uploaded files. Use this to skip extraction for a specific upload.
-
-  ## Examples
-
-      post
-      |> PhxMediaLibrary.add(upload)
-      |> PhxMediaLibrary.without_metadata()
-      |> PhxMediaLibrary.to_collection(:images)
-
   """
   @spec without_metadata(MediaAdder.t()) :: MediaAdder.t()
   defdelegate without_metadata(adder), to: MediaAdder
@@ -170,21 +142,15 @@ defmodule PhxMediaLibrary do
       |> PhxMediaLibrary.add(upload)
       |> PhxMediaLibrary.to_collection(:images)
 
-      post
-      |> PhxMediaLibrary.add(upload)
-      |> PhxMediaLibrary.to_collection(:images, disk: :s3)
-
   """
   @spec to_collection(MediaAdder.t(), atom(), keyword()) ::
-          {:ok, Media.t()} | {:error, term()}
+          {:ok, MediaItem.t()} | {:error, term()}
   defdelegate to_collection(adder, collection_name, opts \\ []), to: MediaAdder
 
   @doc """
   Same as `to_collection/3` but raises on error.
-
-  Raises `PhxMediaLibrary.Error` if the operation fails.
   """
-  @spec to_collection!(MediaAdder.t(), atom(), keyword()) :: Media.t()
+  @spec to_collection!(MediaAdder.t(), atom(), keyword()) :: MediaItem.t()
   def to_collection!(adder, collection_name, opts \\ []) do
     case to_collection(adder, collection_name, opts) do
       {:ok, media} ->
@@ -205,53 +171,15 @@ defmodule PhxMediaLibrary do
     end
   end
 
-  @doc """
-  Returns an `Ecto.Query` for all media belonging to a model, optionally
-  filtered by collection.
-
-  This is useful for composing queries with Ecto — you can add further
-  filters, selects, limits, or use it with `Repo.all/1`, `Repo.one/1`, etc.
-
-  ## Examples
-
-      # All media for a post
-      PhxMediaLibrary.media_query(post)
-      |> Repo.all()
-
-      # Only images
-      PhxMediaLibrary.media_query(post, :images)
-      |> Repo.all()
-
-      # Compose with further constraints
-      PhxMediaLibrary.media_query(post, :images)
-      |> where([m], m.mime_type == "image/png")
-      |> Repo.all()
-
-  """
-  @spec media_query(Ecto.Schema.t(), atom() | nil) :: Ecto.Query.t()
-  def media_query(model, collection_name \\ nil) do
-    mediable_type = get_mediable_type(model)
-    mediable_id = model.id
-
-    query =
-      from(m in Media,
-        where: m.mediable_type == ^mediable_type,
-        where: m.mediable_id == ^mediable_id,
-        order_by: [asc: m.order_column, asc: m.inserted_at]
-      )
-
-    query =
-      if collection_name do
-        where(query, [m], m.collection_name == ^to_string(collection_name))
-      else
-        query
-      end
-
-    Media.exclude_trashed(query)
-  end
+  # ---------------------------------------------------------------------------
+  # Retrieval — read from JSONB
+  # ---------------------------------------------------------------------------
 
   @doc """
   Get all media for a model, optionally filtered by collection.
+
+  Reads from the model's JSONB column. Items are returned sorted
+  by their `order` field.
 
   ## Examples
 
@@ -259,17 +187,25 @@ defmodule PhxMediaLibrary do
       PhxMediaLibrary.get_media(post, :images)
 
   """
-  @spec get_media(Ecto.Schema.t(), atom() | nil) :: [Media.t()]
+  @spec get_media(Ecto.Schema.t(), atom() | nil) :: [MediaItem.t()]
   def get_media(model, collection_name \\ nil) do
-    model
-    |> media_query(collection_name)
-    |> Config.repo().all()
+    data = Helpers.media_data(model)
+    owner_opts = [owner_type: Helpers.owner_type(model), owner_id: to_string(model.id)]
+
+    items =
+      if collection_name do
+        MediaData.get_collection(data, collection_name, owner_opts)
+      else
+        MediaData.all_items(data, owner_opts)
+      end
+
+    Enum.sort_by(items, & &1.order)
   end
 
   @doc """
   Get the first media item for a model in a collection.
   """
-  @spec get_first_media(Ecto.Schema.t(), atom()) :: Media.t() | nil
+  @spec get_first_media(Ecto.Schema.t(), atom()) :: MediaItem.t() | nil
   def get_first_media(model, collection_name) do
     model
     |> get_media(collection_name)
@@ -307,386 +243,241 @@ defmodule PhxMediaLibrary do
     end
   end
 
+  # ---------------------------------------------------------------------------
+  # URL / Path / Srcset delegates
+  # ---------------------------------------------------------------------------
+
   @doc """
   Get the URL for a media item, optionally for a specific conversion.
   """
-  @spec url(Media.t(), atom() | nil) :: String.t()
+  @spec url(MediaItem.t() | Media.t(), atom() | nil) :: String.t()
   defdelegate url(media, conversion \\ nil), to: Media
 
   @doc """
   Get the filesystem path for a media item (local storage only).
   """
-  @spec path(Media.t(), atom() | nil) :: String.t() | nil
+  @spec path(MediaItem.t() | Media.t(), atom() | nil) :: String.t() | nil
   defdelegate path(media, conversion \\ nil), to: Media
 
   @doc """
   Get the srcset attribute value for responsive images.
   """
-  @spec srcset(Media.t(), atom() | nil) :: String.t() | nil
+  @spec srcset(MediaItem.t() | Media.t(), atom() | nil) :: String.t() | nil
   defdelegate srcset(media, conversion \\ nil), to: Media
 
   @doc """
-  Delete a media item and its files from storage.
+  Verify the integrity of a stored media file by comparing its stored
+  checksum against a freshly computed one.
   """
-  @spec delete(Media.t()) :: :ok | {:ok, Media.t()} | {:error, term()}
-  defdelegate delete(media), to: Media
+  @spec verify_integrity(MediaItem.t() | Media.t()) ::
+          :ok | {:error, :checksum_mismatch | :no_checksum | term()}
+  defdelegate verify_integrity(media), to: Media
+
+  # ---------------------------------------------------------------------------
+  # Delete operations
+  # ---------------------------------------------------------------------------
 
   @doc """
-  Permanently delete a media item and its files from storage.
+  Delete a media item from a collection by UUID.
 
-  This always performs a hard delete regardless of whether soft deletes
-  are enabled. Use this for force-deleting or cleaning up trashed items.
-  """
-  @spec permanently_delete(Media.t()) :: :ok | {:error, term()}
-  defdelegate permanently_delete(media), to: Media
-
-  @doc """
-  Soft-delete a media item by setting its `deleted_at` timestamp.
-
-  The record remains in the database but is excluded from all queries
-  by default. Files are **not** removed from storage. Call
-  `permanently_delete/1` to remove files and the database record.
+  Removes the item from the model's JSONB column and deletes all associated
+  files (original, conversions, responsive variants) from storage.
 
   ## Examples
 
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      trashed.deleted_at  #=> ~U[2026-02-27 17:00:00Z]
+      {:ok, deleted_item} = PhxMediaLibrary.delete_media(post, :images, "uuid-abc")
 
   """
-  @spec soft_delete(Media.t()) :: {:ok, Media.t()} | {:error, Ecto.Changeset.t()}
-  defdelegate soft_delete(media), to: Media
-
-  @doc """
-  Restore a soft-deleted media item by clearing its `deleted_at` timestamp.
-
-  ## Examples
-
-      {:ok, restored} = PhxMediaLibrary.restore(media)
-      restored.deleted_at  #=> nil
-
-  """
-  @spec restore(Media.t()) :: {:ok, Media.t()} | {:error, Ecto.Changeset.t()}
-  defdelegate restore(media), to: Media
-
-  @doc """
-  Check whether a media item has been soft-deleted.
-
-  ## Examples
-
-      PhxMediaLibrary.trashed?(media)  #=> false
-      {:ok, trashed} = PhxMediaLibrary.soft_delete(media)
-      PhxMediaLibrary.trashed?(trashed)  #=> true
-
-  """
-  @spec trashed?(Media.t()) :: boolean()
-  defdelegate trashed?(media), to: Media
-
-  @doc """
-  Get all soft-deleted media for a model, optionally filtered by collection.
-
-  This is the inverse of `get_media/2` — it returns only trashed items.
-
-  ## Examples
-
-      PhxMediaLibrary.get_trashed_media(post)
-      PhxMediaLibrary.get_trashed_media(post, :images)
-
-  """
-  @spec get_trashed_media(Ecto.Schema.t(), atom() | nil) :: [Media.t()]
-  def get_trashed_media(model, collection_name \\ nil) do
-    mediable_type = get_mediable_type(model)
-    mediable_id = model.id
-
-    query =
-      from(m in Media,
-        where: m.mediable_type == ^mediable_type,
-        where: m.mediable_id == ^mediable_id,
-        order_by: [asc: m.order_column, asc: m.inserted_at]
-      )
-
-    query =
-      if collection_name do
-        where(query, [m], m.collection_name == ^to_string(collection_name))
-      else
-        query
-      end
-
-    query
-    |> Media.only_trashed()
-    |> Config.repo().all()
-  end
-
-  @doc """
-  Permanently delete all trashed media for a model that was soft-deleted
-  before the given `DateTime`. Removes files from storage and database
-  records.
-
-  When called without a cutoff, permanently deletes **all** trashed media
-  for the model.
-
-  ## Examples
-
-      # Delete everything trashed more than 30 days ago
-      cutoff = DateTime.add(DateTime.utc_now(), -30, :day)
-      {:ok, count} = PhxMediaLibrary.purge_trashed(post, before: cutoff)
-
-      # Delete all trashed media for the model
-      {:ok, count} = PhxMediaLibrary.purge_trashed(post)
-
-  """
-  @spec purge_trashed(Ecto.Schema.t(), keyword()) ::
-          {:ok, non_neg_integer()} | {:error, term()}
-  def purge_trashed(model, opts \\ []) do
-    cutoff = Keyword.get(opts, :before)
-    mediable_type = get_mediable_type(model)
-    mediable_id = model.id
-
-    query =
-      from(m in Media,
-        where: m.mediable_type == ^mediable_type,
-        where: m.mediable_id == ^mediable_id,
-        where: not is_nil(m.deleted_at)
-      )
-
-    query =
-      if cutoff do
-        where(query, [m], m.deleted_at < ^cutoff)
-      else
-        query
-      end
-
-    trashed_items = Config.repo().all(query)
-
+  @spec delete_media(Ecto.Schema.t(), atom(), String.t()) ::
+          {:ok, MediaItem.t()} | {:error, :not_found}
+  def delete_media(model, collection_name, uuid) do
     Telemetry.span(
-      [:phx_media_library, :batch],
-      %{operation: :purge_trashed, count: length(trashed_items)},
+      [:phx_media_library, :delete],
+      %{collection: collection_name, uuid: uuid},
       fn ->
-        Enum.each(trashed_items, &delete_files/1)
+        owner_opts = [owner_type: Helpers.owner_type(model), owner_id: to_string(model.id)]
 
-        {count, _} =
-          query
-          |> exclude(:order_by)
-          |> Config.repo().delete_all()
+        {removed, updated_data} =
+          model
+          |> Helpers.media_data()
+          |> MediaData.remove_item(collection_name, uuid, owner_opts)
 
-        {{:ok, count}, %{operation: :purge_trashed, count: count}}
+        case removed do
+          nil ->
+            {{:error, :not_found}, %{error: :not_found}}
+
+          item ->
+            # Delete files from storage
+            Media.delete_files(item)
+
+            # Save updated JSONB
+            column = Helpers.media_column(model)
+
+            Config.repo().get!(model.__struct__, model.id)
+            |> Ecto.Changeset.change(%{column => updated_data})
+            |> Config.repo().update!()
+
+            {{:ok, item}, %{media: item}}
+        end
       end
     )
   end
 
   @doc """
-  Verify the integrity of a stored media file by comparing its stored
-  checksum against a freshly computed one.
-
-  Returns `:ok` if the checksums match, `{:error, :checksum_mismatch}` if
-  they differ, or `{:error, :no_checksum}` if no checksum was stored.
-
-  ## Examples
-
-      case PhxMediaLibrary.verify_integrity(media) do
-        :ok -> IO.puts("File is intact")
-        {:error, :checksum_mismatch} -> IO.puts("File has been corrupted!")
-        {:error, :no_checksum} -> IO.puts("No checksum stored for this media")
-      end
-
+  Same as `delete_media/3` but raises on error.
   """
-  @spec verify_integrity(Media.t()) :: :ok | {:error, :checksum_mismatch | :no_checksum | term()}
-  defdelegate verify_integrity(media), to: Media
+  @spec delete_media!(Ecto.Schema.t(), atom(), String.t()) :: MediaItem.t()
+  def delete_media!(model, collection_name, uuid) do
+    case delete_media(model, collection_name, uuid) do
+      {:ok, item} -> item
+      {:error, :not_found} -> raise Error, message: "Media item not found", reason: :not_found
+    end
+  end
 
   @doc """
   Delete all media in a collection for a model.
 
-  Deletes files from storage for each item, then removes all matching
-  database records in a single query. This is significantly more efficient
-  than deleting one-by-one for large collections.
+  Deletes files from storage for each item, then clears the collection
+  from the JSONB column.
 
   ## Examples
 
-      PhxMediaLibrary.clear_collection(post, :images)
+      {:ok, count} = PhxMediaLibrary.clear_collection(post, :images)
 
   """
   @spec clear_collection(Ecto.Schema.t(), atom()) ::
           {:ok, non_neg_integer()} | {:error, term()}
   def clear_collection(model, collection_name) do
-    media_items = get_media(model, collection_name)
+    items = get_media(model, collection_name)
+    count = length(items)
 
-    if Media.soft_deletes_enabled?() do
-      # Soft-delete: set deleted_at on all items
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      Telemetry.span(
-        [:phx_media_library, :batch],
-        %{operation: :clear_collection, count: length(media_items), soft: true},
-        fn ->
-          {count, _} =
-            model
-            |> media_query(collection_name)
-            |> exclude(:order_by)
-            |> Config.repo().update_all(set: [deleted_at: now])
-
-          {{:ok, count}, %{operation: :clear_collection, count: count, soft: true}}
-        end
-      )
-    else
-      Telemetry.span(
-        [:phx_media_library, :batch],
-        %{operation: :clear_collection, count: length(media_items)},
-        fn ->
-          # Delete files from storage for each item
-          Enum.each(media_items, &delete_files/1)
-
-          # Delete all matching records in a single query
-          {count, _} =
-            model
-            |> media_query(collection_name)
-            |> exclude(:order_by)
-            |> Config.repo().delete_all()
-
-          {{:ok, count}, %{operation: :clear_collection, count: count}}
-        end
-      )
-    end
-  end
-
-  @doc """
-  Delete all media for a model.
-
-  Deletes files from storage for each item, then removes all matching
-  database records in a single query.
-
-  ## Examples
-
-      PhxMediaLibrary.clear_media(post)
-
-  """
-  @spec clear_media(Ecto.Schema.t()) :: {:ok, non_neg_integer()} | {:error, term()}
-  def clear_media(model) do
-    media_items = get_media(model)
-
-    if Media.soft_deletes_enabled?() do
-      now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-      Telemetry.span(
-        [:phx_media_library, :batch],
-        %{operation: :clear_media, count: length(media_items), soft: true},
-        fn ->
-          {count, _} =
-            model
-            |> media_query()
-            |> exclude(:order_by)
-            |> Config.repo().update_all(set: [deleted_at: now])
-
-          {{:ok, count}, %{operation: :clear_media, count: count, soft: true}}
-        end
-      )
-    else
-      Telemetry.span(
-        [:phx_media_library, :batch],
-        %{operation: :clear_media, count: length(media_items)},
-        fn ->
-          # Delete files from storage for each item
-          Enum.each(media_items, &delete_files/1)
-
-          # Delete all matching records in a single query
-          {count, _} =
-            model
-            |> media_query()
-            |> exclude(:order_by)
-            |> Config.repo().delete_all()
-
-          {{:ok, count}, %{operation: :clear_media, count: count}}
-        end
-      )
-    end
-  end
-
-  @doc """
-  Reorder media items in a collection by a list of IDs.
-
-  Sets the `order_column` for each media record according to its position
-  in the given ID list. Uses a single database transaction with individual
-  updates for correctness.
-
-  IDs not present in the collection are silently ignored. Media items in
-  the collection whose IDs are not in the list keep their current order
-  but are shifted after the explicitly ordered items.
-
-  ## Examples
-
-      # Set explicit order: id3 first, id1 second, id2 third
-      PhxMediaLibrary.reorder(post, :images, [id3, id1, id2])
-
-  """
-  @spec reorder(Ecto.Schema.t(), atom(), [String.t()]) ::
-          {:ok, non_neg_integer()} | {:error, term()}
-  def reorder(model, collection_name, ordered_ids) when is_list(ordered_ids) do
     Telemetry.span(
       [:phx_media_library, :batch],
-      %{operation: :reorder, count: length(ordered_ids)},
+      %{operation: :clear_collection, count: count},
       fn ->
-        result = do_reorder_transaction(model, collection_name, ordered_ids)
+        # Delete files from storage
+        Enum.each(items, &Media.delete_files/1)
 
-        case result do
-          {:ok, count} ->
-            Telemetry.event(
-              [:phx_media_library, :reorder],
-              %{count: count},
-              %{model: model, collection: collection_name}
-            )
+        # Clear collection from JSONB
+        Helpers.update_media_data(model, fn data ->
+          Map.put(data, to_string(collection_name), [])
+        end)
 
-            {{:ok, count}, %{operation: :reorder, count: count}}
-
-          {:error, reason} ->
-            {{:error, reason}, %{operation: :reorder, error: reason}}
-        end
+        {{:ok, count}, %{operation: :clear_collection, count: count}}
       end
     )
   end
 
   @doc """
-  Move a single media item to a specific position within its collection.
+  Delete all media for a model.
 
-  Shifts other items' `order_column` values to make room, then sets the
-  target item's position. Position is 1-based.
+  Deletes files from storage for each item, then clears the entire
+  JSONB column.
 
   ## Examples
 
-      PhxMediaLibrary.move_to(media, 1)   # move to first position
-      PhxMediaLibrary.move_to(media, 3)   # move to third position
+      {:ok, count} = PhxMediaLibrary.clear_media(post)
 
   """
-  @spec move_to(Media.t(), pos_integer()) :: {:ok, Media.t()} | {:error, term()}
-  def move_to(%Media{} = media, position) when is_integer(position) and position >= 1 do
-    # Get all items in the same collection, ordered
-    siblings =
-      from(m in Media,
-        where: m.mediable_type == ^media.mediable_type,
-        where: m.mediable_id == ^media.mediable_id,
-        where: m.collection_name == ^media.collection_name,
-        order_by: [asc: m.order_column, asc: m.inserted_at]
-      )
-      |> Config.repo().all()
+  @spec clear_media(Ecto.Schema.t()) :: {:ok, non_neg_integer()} | {:error, term()}
+  def clear_media(model) do
+    items = get_media(model)
+    count = length(items)
 
-    # Remove the target from the list and reinsert at position
-    others = Enum.reject(siblings, &(&1.id == media.id))
-    clamped_position = min(position, length(others) + 1)
-    reordered = List.insert_at(others, clamped_position - 1, media)
+    Telemetry.span(
+      [:phx_media_library, :batch],
+      %{operation: :clear_media, count: count},
+      fn ->
+        # Delete files from storage
+        Enum.each(items, &Media.delete_files/1)
 
-    ordered_ids = Enum.map(reordered, & &1.id)
+        # Clear entire JSONB
+        Helpers.update_media_data(model, fn _data -> %{} end)
 
-    # Reuse reorder logic — we need the model info from the media record
-    Config.repo().transaction(fn ->
-      ordered_ids
-      |> Enum.with_index(1)
-      |> Enum.each(fn {id, pos} ->
-        from(m in Media, where: m.id == ^id)
-        |> Config.repo().update_all(set: [order_column: pos])
-      end)
-    end)
+        {{:ok, count}, %{operation: :clear_media, count: count}}
+      end
+    )
+  end
 
-    # Return the updated media
-    case Config.repo().get(Media, media.id) do
-      nil -> {:error, :not_found}
-      updated -> {:ok, updated}
+  # ---------------------------------------------------------------------------
+  # Reordering
+  # ---------------------------------------------------------------------------
+
+  @doc """
+  Reorder media items in a collection by a list of UUIDs.
+
+  Items are sorted to match the order of the UUID list, and their `order`
+  field is updated. UUIDs not in the collection are ignored.
+
+  ## Examples
+
+      PhxMediaLibrary.reorder(post, :images, [uuid3, uuid1, uuid2])
+
+  """
+  @spec reorder(Ecto.Schema.t(), atom(), [String.t()]) ::
+          {:ok, non_neg_integer()} | {:error, term()}
+  def reorder(model, collection_name, ordered_uuids) when is_list(ordered_uuids) do
+    Telemetry.span(
+      [:phx_media_library, :batch],
+      %{operation: :reorder, count: length(ordered_uuids)},
+      fn ->
+        updated_model =
+          Helpers.update_media_data(model, fn data ->
+            MediaData.reorder(data, collection_name, ordered_uuids)
+          end)
+
+        column = Helpers.media_column(model)
+        data = Map.get(updated_model, column) || %{}
+        count = MediaData.count(data, collection_name)
+
+        Telemetry.event(
+          [:phx_media_library, :reorder],
+          %{count: count},
+          %{model: model, collection: collection_name}
+        )
+
+        {{:ok, count}, %{operation: :reorder, count: count}}
+      end
+    )
+  end
+
+  @doc """
+  Move a media item to a specific position within its collection.
+
+  Position is 1-based. Shifts other items to accommodate.
+
+  ## Examples
+
+      PhxMediaLibrary.move_to(post, :images, "uuid-abc", 1)  # move to first
+
+  """
+  @spec move_to(Ecto.Schema.t(), atom(), String.t(), pos_integer()) ::
+          {:ok, MediaItem.t()} | {:error, :not_found}
+  def move_to(model, collection_name, uuid, position)
+      when is_integer(position) and position >= 1 do
+    data = Helpers.media_data(model)
+    items = MediaData.get_collection(data, collection_name)
+    uuids = Enum.map(items, & &1.uuid)
+
+    if uuid in uuids do
+      # Remove target from list
+      others = Enum.reject(uuids, &(&1 == uuid))
+      clamped = min(position - 1, length(others))
+      reordered = List.insert_at(others, clamped, uuid)
+
+      {:ok, _count} = reorder(model, collection_name, reordered)
+
+      # Return the updated item
+      fresh_model = Config.repo().get!(model.__struct__, model.id)
+      fresh_data = Helpers.media_data(fresh_model)
+      owner_opts = [owner_type: Helpers.owner_type(model), owner_id: to_string(model.id)]
+
+      case MediaData.get_item(fresh_data, collection_name, uuid, owner_opts) do
+        nil -> {:error, :not_found}
+        item -> {:ok, item}
+      end
+    else
+      {:error, :not_found}
     end
   end
 
@@ -697,25 +488,12 @@ defmodule PhxMediaLibrary do
   @doc """
   Generate a presigned URL for direct client-to-storage uploads.
 
-  This allows the client (browser) to upload files directly to a remote
-  storage backend (e.g. S3) without proxying through the server. The server
-  only generates the signed URL and, after the upload completes, creates the
-  `Media` record via `complete_external_upload/4`.
-
-  Returns `{:ok, url, fields, upload_key}` on success, where:
-  - `url` — the presigned upload endpoint
-  - `fields` — a map of form fields for POST-based uploads (empty for PUT)
-  - `upload_key` — the storage path to pass back to `complete_external_upload/4`
-
-  Returns `{:error, :not_supported}` if the storage adapter doesn't support
-  presigned URLs (e.g. local disk storage).
-
   ## Options
 
-  - `:disk` — storage disk to use (default: collection or global default)
+  - `:disk` — storage disk to use
   - `:filename` — the filename for the upload (required)
-  - `:content_type` — expected MIME type of the upload
-  - `:expires_in` — URL expiration in seconds (default: 3600)
+  - `:content_type` — expected MIME type
+  - `:expires_in` — URL expiration in seconds
   - `:max_size` — maximum upload size in bytes
 
   ## Examples
@@ -723,17 +501,7 @@ defmodule PhxMediaLibrary do
       {:ok, url, fields, key} =
         PhxMediaLibrary.presigned_upload_url(post, :images,
           filename: "photo.jpg",
-          content_type: "image/jpeg",
-          expires_in: 600
-        )
-
-      # Client uploads directly to `url` with `fields`
-      # Then server completes:
-      {:ok, media} =
-        PhxMediaLibrary.complete_external_upload(post, :images, key,
-          filename: "photo.jpg",
-          content_type: "image/jpeg",
-          size: 123_456
+          content_type: "image/jpeg"
         )
 
   """
@@ -741,16 +509,16 @@ defmodule PhxMediaLibrary do
           {:ok, String.t(), map(), String.t()} | {:error, term()}
   def presigned_upload_url(model, collection_name, opts \\ []) do
     filename = Keyword.fetch!(opts, :filename)
-    disk = Keyword.get(opts, :disk) || get_default_disk(model, collection_name)
+    disk = Keyword.get(opts, :disk) || Helpers.default_disk(model, collection_name)
     storage = Config.storage_adapter(disk)
 
     uuid = Ecto.UUID.generate()
-    mediable_type = get_mediable_type(model)
+    owner_type = Helpers.owner_type(model)
 
     storage_path =
       PathGenerator.for_new_media(%{
-        mediable_type: mediable_type,
-        mediable_id: model.id,
+        owner_type: owner_type,
+        owner_id: model.id,
         uuid: uuid,
         file_name: filename
       })
@@ -770,42 +538,29 @@ defmodule PhxMediaLibrary do
   end
 
   @doc """
-  Complete a direct (presigned) upload by creating the `Media` record.
-
-  Call this after the client has finished uploading directly to storage.
-  The file is already stored — this function only creates the database
-  record and optionally triggers conversions.
+  Complete a direct (presigned) upload by creating the media record in JSONB.
 
   ## Required options
 
   - `:filename` — original filename
-  - `:content_type` — MIME type of the uploaded file
+  - `:content_type` — MIME type
   - `:size` — file size in bytes
 
   ## Optional options
 
-  - `:disk` — storage disk (must match the one used for `presigned_upload_url/3`)
-  - `:custom_properties` — user-defined metadata map
-  - `:checksum` — pre-computed checksum (e.g. from client-side hashing)
+  - `:disk` — storage disk
+  - `:custom_properties` — metadata map
+  - `:checksum` — pre-computed checksum
   - `:checksum_algorithm` — algorithm used (default: `"sha256"`)
-
-  ## Examples
-
-      {:ok, media} =
-        PhxMediaLibrary.complete_external_upload(post, :images, upload_key,
-          filename: "photo.jpg",
-          content_type: "image/jpeg",
-          size: 45_000
-        )
 
   """
   @spec complete_external_upload(Ecto.Schema.t(), atom(), String.t(), keyword()) ::
-          {:ok, Media.t()} | {:error, term()}
+          {:ok, MediaItem.t()} | {:error, term()}
   def complete_external_upload(model, collection_name, storage_path, opts) do
     filename = Keyword.fetch!(opts, :filename)
     content_type = Keyword.fetch!(opts, :content_type)
     size = Keyword.fetch!(opts, :size)
-    disk = Keyword.get(opts, :disk) || get_default_disk(model, collection_name)
+    disk = Keyword.get(opts, :disk) || Helpers.default_disk(model, collection_name)
     custom_properties = Keyword.get(opts, :custom_properties, %{})
     checksum = Keyword.get(opts, :checksum)
     checksum_algorithm = Keyword.get(opts, :checksum_algorithm, "sha256")
@@ -816,43 +571,41 @@ defmodule PhxMediaLibrary do
       |> Path.split()
       |> Enum.at(2) || Ecto.UUID.generate()
 
-    mediable_type = get_mediable_type(model)
+    owner_type = Helpers.owner_type(model)
 
-    attrs = %{
-      uuid: uuid,
-      collection_name: to_string(collection_name),
-      name: sanitize_name(filename),
-      file_name: filename,
-      mime_type: content_type,
-      disk: to_string(disk),
-      size: size,
-      custom_properties: custom_properties,
-      metadata: %{},
-      mediable_type: mediable_type,
-      mediable_id: model.id,
-      order_column: get_next_order(model, collection_name),
-      checksum: checksum,
-      checksum_algorithm: if(checksum, do: checksum_algorithm, else: nil)
-    }
+    media_item =
+      MediaItem.new(
+        uuid: uuid,
+        name: Helpers.sanitize_name(filename),
+        file_name: filename,
+        mime_type: content_type,
+        disk: to_string(disk),
+        size: size,
+        custom_properties: custom_properties,
+        metadata: %{},
+        order: next_order(model, collection_name),
+        checksum: checksum,
+        checksum_algorithm: if(checksum, do: checksum_algorithm, else: "sha256"),
+        inserted_at: DateTime.utc_now() |> DateTime.to_iso8601(),
+        owner_type: owner_type,
+        owner_id: to_string(model.id),
+        collection_name: to_string(collection_name)
+      )
 
     Telemetry.span(
       [:phx_media_library, :add],
       %{collection: collection_name, source_type: :external, model: model},
       fn ->
-        result =
-          with {:ok, media} <- insert_media(attrs) do
-            maybe_cleanup_collection(model, collection_name, media)
-            maybe_process_conversions(model, media, collection_name)
-            {:ok, media}
-          end
+        # Add to JSONB
+        Helpers.update_media_data(model, fn data ->
+          MediaData.put_item(data, collection_name, media_item)
+        end)
 
-        stop_metadata =
-          case result do
-            {:ok, media} -> %{media: media}
-            {:error, reason} -> %{error: reason}
-          end
+        # Trigger conversions
+        maybe_process_conversions(model, media_item, collection_name)
 
-        {result, stop_metadata}
+        result = {:ok, media_item}
+        {result, %{media: media_item}}
       end
     )
   end
@@ -861,26 +614,9 @@ defmodule PhxMediaLibrary do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  defp do_reorder_transaction(model, collection_name, ordered_ids) do
-    mediable_type = get_mediable_type(model)
-    collection_str = to_string(collection_name)
-
-    Config.repo().transaction(fn ->
-      ordered_ids
-      |> Enum.with_index(1)
-      |> Enum.reduce(0, fn {id, position}, acc ->
-        {count, _} =
-          from(m in Media,
-            where: m.id == ^id,
-            where: m.mediable_type == ^mediable_type,
-            where: m.mediable_id == ^model.id,
-            where: m.collection_name == ^collection_str
-          )
-          |> Config.repo().update_all(set: [order_column: position])
-
-        acc + count
-      end)
-    end)
+  defp next_order(model, collection_name) do
+    data = Helpers.media_data(model)
+    MediaData.count(data, collection_name)
   end
 
   defp maybe_add_size_constraint(presigned_opts, opts) do
@@ -890,79 +626,7 @@ defmodule PhxMediaLibrary do
     end
   end
 
-  defp get_default_disk(model, collection_name) do
-    case get_collection_config(model, collection_name) do
-      %{disk: disk} when not is_nil(disk) -> disk
-      _ -> Config.default_disk()
-    end
-  end
-
-  defp get_collection_config(model, collection_name) do
-    if function_exported?(model.__struct__, :get_media_collection, 1) do
-      model.__struct__.get_media_collection(collection_name)
-    else
-      nil
-    end
-  end
-
-  defp get_next_order(model, collection_name) do
-    mediable_type = get_mediable_type(model)
-    collection_str = to_string(collection_name)
-
-    query =
-      from(m in Media,
-        where: m.mediable_type == ^mediable_type,
-        where: m.mediable_id == ^model.id,
-        where: m.collection_name == ^collection_str,
-        select: max(m.order_column)
-      )
-
-    case Config.repo().one(query) do
-      nil -> 1
-      max -> max + 1
-    end
-  end
-
-  defp sanitize_name(filename) do
-    filename
-    |> Path.rootname()
-    |> String.downcase()
-    |> String.replace(~r/[^a-z0-9_-]/, "-")
-    |> String.replace(~r/-+/, "-")
-    |> String.trim("-")
-  end
-
-  defp insert_media(attrs) do
-    %Media{}
-    |> Media.changeset(attrs)
-    |> Config.repo().insert()
-  end
-
-  defp maybe_cleanup_collection(model, collection_name, new_media) do
-    case get_collection_config(model, collection_name) do
-      %{single_file: true} ->
-        # Delete older media in collection, keep only the new one
-        media_items = get_media(model, collection_name)
-
-        media_items
-        |> Enum.reject(&(&1.id == new_media.id))
-        |> Enum.each(&Media.permanently_delete/1)
-
-      %{max_files: max} when is_integer(max) and max > 0 ->
-        media_items = get_media(model, collection_name)
-
-        if length(media_items) > max do
-          media_items
-          |> Enum.drop(-max)
-          |> Enum.each(&Media.permanently_delete/1)
-        end
-
-      _ ->
-        :ok
-    end
-  end
-
-  defp maybe_process_conversions(model, media, collection_name) do
+  defp maybe_process_conversions(model, media_item, collection_name) do
     conversions =
       if function_exported?(model.__struct__, :get_media_conversions, 1) do
         model.__struct__.get_media_conversions(collection_name)
@@ -971,51 +635,14 @@ defmodule PhxMediaLibrary do
       end
 
     if conversions != [] do
-      Config.async_processor().process_async(media, conversions)
+      context = %{
+        owner_module: model.__struct__,
+        owner_id: model.id,
+        collection_name: to_string(collection_name),
+        item_uuid: media_item.uuid
+      }
+
+      Config.async_processor().process_async(context, conversions)
     end
-  end
-
-  defp get_mediable_type(model) do
-    if function_exported?(model.__struct__, :__media_type__, 0) do
-      model.__struct__.__media_type__()
-    else
-      if function_exported?(model.__struct__, :__schema__, 1) do
-        model.__struct__.__schema__(:source)
-      else
-        model.__struct__
-        |> Module.split()
-        |> List.last()
-        |> Macro.underscore()
-      end
-    end
-  end
-
-  # Delete all files (original + conversions + responsive) from storage
-  # for a media item, without touching the database record.
-  defp delete_files(%Media{disk: disk} = media) do
-    storage = Config.storage_adapter(disk)
-
-    # Delete original
-    original_path = PathGenerator.relative_path(media, nil)
-    StorageWrapper.delete(storage, original_path)
-
-    # Delete conversions
-    media.generated_conversions
-    |> Map.keys()
-    |> Enum.each(fn conversion ->
-      conversion_path = PathGenerator.relative_path(media, conversion)
-      StorageWrapper.delete(storage, conversion_path)
-    end)
-
-    # Delete responsive image variants
-    media.responsive_images
-    |> Map.values()
-    |> List.flatten()
-    |> Enum.each(fn
-      %{"path" => path} -> StorageWrapper.delete(storage, path)
-      _ -> :ok
-    end)
-
-    :ok
   end
 end

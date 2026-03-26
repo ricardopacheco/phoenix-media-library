@@ -43,7 +43,7 @@ defmodule PhxMediaLibrary.ViewHelpers do
       <.media_img media={@image} conversion={:thumb} alt="Product thumbnail" />
 
   """
-  attr(:media, Media, required: true)
+  attr(:media, :map, required: true)
   attr(:conversion, :atom, default: nil)
   attr(:alt, :string, default: nil)
   attr(:class, :string, default: nil)
@@ -99,7 +99,7 @@ defmodule PhxMediaLibrary.ViewHelpers do
       />
 
   """
-  attr(:media, Media, required: true)
+  attr(:media, :map, required: true)
   attr(:conversion, :atom, default: nil)
   attr(:sizes, :string, default: "100vw")
   attr(:alt, :string, default: nil)
@@ -163,7 +163,7 @@ defmodule PhxMediaLibrary.ViewHelpers do
       />
 
   """
-  attr(:media, Media, required: true)
+  attr(:media, :map, required: true)
   attr(:conversion, :atom, default: nil)
   attr(:alt, :string, default: nil)
   attr(:class, :string, default: nil)

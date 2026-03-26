@@ -4,7 +4,7 @@
 [![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/phx_media_library)
 [![License](https://img.shields.io/hexpm/l/phx_media_library.svg)](https://github.com/mike-kostov/phx_media_library/blob/main/LICENSE)
 
-A robust, Ecto-backed media management library for Elixir and Phoenix, inspired by [Spatie's Laravel Media Library](https://spatie.be/docs/laravel-medialibrary).
+A robust media management library for Elixir and Phoenix. Media data is stored in JSONB columns on your Ecto schemas — no separate media table needed. Architecture inspired by [Shrine](https://shrinerb.com/), based on [phoenix-media-library](https://github.com/mike-kostov/phoenix-media-library) by Mike Kostov.
 
 Associate files with any Ecto schema using a fluent, composable API — with
 collections, image conversions, LiveView components, and multiple storage
@@ -19,10 +19,7 @@ defmodule MyApp.Post do
 
   schema "posts" do
     field :title, :string
-
-    has_media()          # all media for this model
-    has_media(:images)   # scoped to "images" collection
-    has_media(:avatar)   # scoped to "avatar" collection
+    field :media_data, :map, default: %{}
 
     timestamps()
   end
@@ -55,7 +52,7 @@ PhxMediaLibrary.get_media(post, :images)
 PhxMediaLibrary.get_first_media_url(post, :images, :thumb)
 
 # Delete
-PhxMediaLibrary.delete(media)
+PhxMediaLibrary.delete_media(post, :images, media.uuid)
 {:ok, count} = PhxMediaLibrary.clear_collection(post, :images)
 ```
 
@@ -100,7 +97,7 @@ end
 
 | Category | What you get |
 |----------|-------------|
-| **Schema integration** | Polymorphic `has_media()` macro, declarative DSL for collections & conversions |
+| **Schema integration** | JSONB column per schema, declarative DSL for collections & conversions |
 | **Collections** | MIME validation, file limits, size limits, single-file mode, fallback URLs |
 | **Image conversions** | Thumbnails, resizes, format conversion, responsive srcset — optional, works without libvips |
 | **Metadata extraction** | Auto-extract dimensions, EXIF, format, type classification; stored in `metadata` JSON field |
@@ -108,16 +105,15 @@ end
 | **Storage** | Local disk, S3, in-memory (tests), or custom adapters via `PhxMediaLibrary.Storage` behaviour |
 | **Streaming uploads** | Files streamed to storage in 64 KB chunks — never loaded entirely into memory |
 | **Direct S3 uploads** | `presigned_upload_url/3` + `complete_external_upload/4` for client-to-S3 without proxying |
-| **Soft deletes** | Opt-in `deleted_at` with `restore/1`, `purge_trashed/2`, query scoping, and purge Mix task |
+| **Soft deletes** | At parent record level only — media files are removed when the parent record is hard-deleted |
 | **Async processing** | Task (default) or Oban adapter with persistence, retries, and `process_sync/2` |
 | **LiveView** | Drop-in `<.media_upload>` and `<.media_gallery>` components, `LiveUpload` helpers |
 | **Security** | Content-based MIME detection (50+ formats via magic bytes), SHA-256 checksums |
-| **Batch ops** | `clear_collection/2`, `clear_media/1`, `reorder/3`, `move_to/2` |
+| **Batch ops** | `clear_collection/2`, `clear_media/1`, `reorder/3`, `move_to/4` |
 | **Telemetry** | `:start`/`:stop`/`:exception` spans for add, delete, conversion, storage, batch, download |
 | **Errors** | Tagged tuples + structured exceptions (`Error`, `StorageError`, `ValidationError`) |
-| **Queries** | `media_query/2` returns composable `Ecto.Query` |
 | **View helpers** | `<.media_img>`, `<.responsive_img>`, `<.picture>` components |
-| **Mix tasks** | Install, regenerate conversions, clean orphans, purge deleted, generate migrations |
+| **Mix tasks** | Install, regenerate conversions, clean orphans, generate migrations |
 
 ## Installation
 
@@ -155,7 +151,7 @@ config :phx_media_library,
 ```
 
 ```bash
-mix phx_media_library.install
+mix phx_media_library.install --table posts
 mix ecto.migrate
 ```
 
@@ -194,4 +190,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## Acknowledgments
 
-Inspired by [Spatie's Laravel Media Library](https://spatie.be/docs/laravel-medialibrary), bringing its excellent developer experience to the Elixir ecosystem.
+Based on [phoenix-media-library](https://github.com/mike-kostov/phoenix-media-library) by Mike Kostov. JSONB storage architecture inspired by [Shrine](https://shrinerb.com/).

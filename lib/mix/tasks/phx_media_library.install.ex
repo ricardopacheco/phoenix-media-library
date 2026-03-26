@@ -3,18 +3,20 @@ defmodule Mix.Tasks.PhxMediaLibrary.Install do
   Installs PhxMediaLibrary in your project.
 
   This task will:
-  1. Generate the media table migration
-  2. Print configuration instructions
+  1. Generate a migration that adds a JSONB media column to a specified table
+  2. Print configuration and usage instructions
 
   ## Usage
 
-      $ mix phx_media_library.install
+      $ mix phx_media_library.install --table posts
+      $ mix phx_media_library.install --table posts --column attachments
+      $ mix phx_media_library.install --table posts --no-migration
 
   ## Options
 
+      --table         Target table name (required)
+      --column        JSONB column name (default: "media_data")
       --no-migration  Skip migration generation
-      --binary-id     Use binary IDs for primary keys (default: true)
-      --table         Custom table name (default: "media")
 
   """
 
@@ -24,7 +26,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Install do
 
   import Mix.Generator
 
-  @default_table "media"
+  @default_column "media_data"
 
   @impl Mix.Task
   def run(args) do
@@ -32,13 +34,19 @@ defmodule Mix.Tasks.PhxMediaLibrary.Install do
       OptionParser.parse(args,
         strict: [
           no_migration: :boolean,
-          binary_id: :boolean,
-          table: :string
+          table: :string,
+          column: :string
         ]
       )
 
-    table = opts[:table] || @default_table
-    binary_id? = Keyword.get(opts, :binary_id, true)
+    table = opts[:table]
+    column = opts[:column] || @default_column
+
+    unless table do
+      Mix.shell().error("Missing required --table option.")
+      Mix.shell().error("Usage: mix phx_media_library.install --table <table_name>")
+      exit(:shutdown)
+    end
 
     Mix.shell().info("""
 
@@ -47,15 +55,15 @@ defmodule Mix.Tasks.PhxMediaLibrary.Install do
     """)
 
     unless opts[:no_migration] do
-      generate_migration(table, binary_id?)
+      generate_migration(table, column)
     end
 
     print_configuration_instructions()
-    print_usage_instructions()
+    print_usage_instructions(table, column)
 
     Mix.shell().info("""
 
-    #{IO.ANSI.green()}✓ Installation complete!#{IO.ANSI.reset()}
+    #{IO.ANSI.green()}Installation complete!#{IO.ANSI.reset()}
 
     Next steps:
     1. Review and run the migration: #{IO.ANSI.cyan()}mix ecto.migrate#{IO.ANSI.reset()}
@@ -65,73 +73,42 @@ defmodule Mix.Tasks.PhxMediaLibrary.Install do
     """)
   end
 
-  defp generate_migration(table, binary_id?) do
+  defp generate_migration(table, column) do
     Mix.shell().info("#{IO.ANSI.cyan()}Generating migration...#{IO.ANSI.reset()}")
 
-    # Get the repo from config or infer from app
-    _app = Mix.Project.config()[:app]
     migrations_path = Path.join(["priv", "repo", "migrations"])
-
     File.mkdir_p!(migrations_path)
 
     timestamp = generate_timestamp()
-    filename = "#{timestamp}_create_#{table}_table.exs"
+    filename = "#{timestamp}_add_#{column}_to_#{table}.exs"
     path = Path.join(migrations_path, filename)
 
-    migration_content = migration_template(table, binary_id?)
+    migration_content = migration_template(table, column)
 
     create_file(path, migration_content)
 
-    Mix.shell().info("  #{IO.ANSI.green()}✓#{IO.ANSI.reset()} Created #{path}")
+    Mix.shell().info("  #{IO.ANSI.green()}Created#{IO.ANSI.reset()} #{path}")
   end
 
-  defp migration_template(table, binary_id?) do
-    primary_key_type = if binary_id?, do: ":binary_id", else: ":id"
-    foreign_key_type = if binary_id?, do: ":binary_id", else: ":bigint"
+  defp migration_template(table, column) do
+    module_name = "Add#{Macro.camelize(column)}To#{Macro.camelize(table)}"
 
     """
-    defmodule #{inspect(repo_module())}.Migrations.Create#{Macro.camelize(table)}Table do
+    defmodule #{inspect(repo_module())}.Migrations.#{module_name} do
       use Ecto.Migration
 
       def change do
-        create table(:#{table}, primary_key: [type: #{primary_key_type}]) do
-          add :uuid, :string, null: false
-          add :collection_name, :string, null: false, default: "default"
-          add :name, :string, null: false
-          add :file_name, :string, null: false
-          add :mime_type, :string, null: false
-          add :disk, :string, null: false
-          add :size, :bigint, null: false
-          add :custom_properties, :map, default: %{}
-          add :generated_conversions, :map, default: %{}
-          add :responsive_images, :map, default: %{}
-          add :order_column, :integer
-          add :checksum, :string
-          add :checksum_algorithm, :string, default: "sha256"
-          add :metadata, :map, default: %{}
-          add :deleted_at, :utc_datetime
-
-          # Polymorphic association
-          add :mediable_type, :string, null: false
-          add :mediable_id, #{foreign_key_type}, null: false
-
-          timestamps(type: :utc_datetime)
+        alter table(:#{table}) do
+          add :#{column}, :map, default: %{}, null: false
         end
 
-        create unique_index(:#{table}, [:uuid])
-        create index(:#{table}, [:mediable_type, :mediable_id])
-        create index(:#{table}, [:collection_name])
-        create index(:#{table}, [:mediable_type, :mediable_id, :collection_name])
-        create index(:#{table}, [:checksum])
-        create index(:#{table}, [:deleted_at])
+        create index(:#{table}, [:#{column}], using: "GIN")
       end
     end
     """
   end
 
   defp print_configuration_instructions do
-    _app = Mix.Project.config()[:app]
-
     Mix.shell().info("""
 
     #{IO.ANSI.cyan()}Configuration#{IO.ANSI.reset()}
@@ -159,34 +136,33 @@ defmodule Mix.Tasks.PhxMediaLibrary.Install do
     """)
   end
 
-  defp print_usage_instructions do
+  defp print_usage_instructions(table, column) do
+    schema_module = table |> Macro.camelize() |> String.replace(~r/s$/, "")
+
     Mix.shell().info("""
     #{IO.ANSI.cyan()}Usage#{IO.ANSI.reset()}
     -----
 
-    Add to your Ecto schema:
+    Add the JSONB field and HasMedia to your Ecto schema:
 
-        defmodule #{inspect(app_module())}.Post do
+        defmodule #{inspect(app_module())}.#{schema_module} do
           use Ecto.Schema
-          use PhxMediaLibrary.HasMedia
+          use PhxMediaLibrary.HasMedia, column: :#{column}
 
-          schema "posts" do
+          schema "#{table}" do
             field :title, :string
-            has_media()
+            field :#{column}, :map, default: %{}
             timestamps()
           end
 
-          def media_collections do
-            [
-              collection(:images),
-              collection(:avatar, single_file: true)
-            ]
-          end
+          media_collections do
+            collection :images, disk: :local, max_files: 20 do
+              convert :thumb, width: 150, height: 150, fit: :cover
+            end
 
-          def media_conversions do
-            [
-              conversion(:thumb, width: 150, height: 150, fit: :cover)
-            ]
+            collection :avatar, single_file: true do
+              convert :thumb, width: 150, height: 150, fit: :cover
+            end
           end
         end
 

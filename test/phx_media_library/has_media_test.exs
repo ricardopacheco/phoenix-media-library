@@ -23,6 +23,10 @@ defmodule PhxMediaLibrary.HasMediaTest do
     test "TestPost has get_media_conversions/1 function" do
       assert function_exported?(PhxMediaLibrary.TestPost, :get_media_conversions, 1)
     end
+
+    test "TestPost has __media_column__/0 function" do
+      assert function_exported?(PhxMediaLibrary.TestPost, :__media_column__, 0)
+    end
   end
 
   describe "media_collections/0" do
@@ -186,6 +190,26 @@ defmodule PhxMediaLibrary.HasMediaTest do
     end
   end
 
+  describe "__media_column__/0" do
+    test "returns :media_data by default" do
+      assert PhxMediaLibrary.TestPost.__media_column__() == :media_data
+    end
+
+    defmodule CustomColumnSchema do
+      use Ecto.Schema
+      use PhxMediaLibrary.HasMedia, column: :files_data
+
+      @primary_key {:id, :binary_id, autogenerate: true}
+      schema "custom_column" do
+        field(:name, :string)
+      end
+    end
+
+    test "returns custom column name when configured" do
+      assert CustomColumnSchema.__media_column__() == :files_data
+    end
+  end
+
   describe "default implementations" do
     defmodule MinimalSchema do
       use Ecto.Schema
@@ -194,7 +218,6 @@ defmodule PhxMediaLibrary.HasMediaTest do
       @primary_key {:id, :binary_id, autogenerate: true}
       schema "minimal" do
         field(:name, :string)
-        has_media()
       end
 
       # Not overriding media_collections/0 or media_conversions/0
@@ -216,6 +239,10 @@ defmodule PhxMediaLibrary.HasMediaTest do
       assert MinimalSchema.get_media_conversions() == []
       assert MinimalSchema.get_media_conversions(:images) == []
     end
+
+    test "__media_column__ returns :media_data by default" do
+      assert MinimalSchema.__media_column__() == :media_data
+    end
   end
 
   describe "overriding defaults" do
@@ -226,7 +253,6 @@ defmodule PhxMediaLibrary.HasMediaTest do
       @primary_key {:id, :binary_id, autogenerate: true}
       schema "custom" do
         field(:title, :string)
-        has_media()
       end
 
       def media_collections do

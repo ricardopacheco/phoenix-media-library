@@ -38,9 +38,9 @@ defmodule PhxMediaLibrary.LiveUpload do
           end
         end
 
-        def handle_event("delete_media", %{"id" => id}, socket) do
-          case delete_media_by_id(id, notify: self()) do
-            :ok -> {:noreply, stream_delete_by_dom_id(socket, :media, "media-\#{id}")}
+        def handle_event("delete_media", %{"id" => uuid}, socket) do
+          case delete_media_by_uuid(socket.assigns.post, :images, uuid, notify: self()) do
+            :ok -> {:noreply, stream_delete_by_dom_id(socket, :media, "media-\#{uuid}")}
             {:error, reason} -> {:noreply, put_flash(socket, :error, inspect(reason))}
           end
         end
@@ -103,15 +103,15 @@ defmodule PhxMediaLibrary.LiveUpload do
   option. When set to a pid (e.g. `self()`), lifecycle messages are sent
   to that process:
 
-  - `{:media_added, [Media.t()]}` — after successful upload consumption
+  - `{:media_added, [MediaItem.t()]}` — after successful upload consumption
   - `{:media_error, reason}` — when upload consumption fails
-  - `{:media_removed, Media.t()}` — after successful media deletion
+  - `{:media_removed, MediaItem.t()}` — after successful media deletion
 
   This allows parent LiveViews (or any process) to react to media
   lifecycle events via `handle_info/2`.
   """
 
-  alias PhxMediaLibrary.{Collection, Config, Media}
+  alias PhxMediaLibrary.{Collection, Helpers, MediaItem}
 
   @doc false
   defmacro __using__(_opts) do
@@ -168,7 +168,7 @@ defmodule PhxMediaLibrary.LiveUpload do
     {model, opts} = Keyword.pop!(opts, :model)
     {collection_name, opts} = Keyword.pop!(opts, :collection)
 
-    collection_config = get_collection_config(model, collection_name)
+    collection_config = Helpers.collection_config(model, collection_name)
 
     upload_opts =
       opts
@@ -206,7 +206,7 @@ defmodule PhxMediaLibrary.LiveUpload do
 
     socket
     |> Phoenix.LiveView.stream_configure(stream_name,
-      dom_id: &"media-#{&1.id}"
+      dom_id: &"media-#{&1.uuid}"
     )
     |> Phoenix.LiveView.stream(stream_name, media_items)
   end
@@ -222,7 +222,7 @@ defmodule PhxMediaLibrary.LiveUpload do
   entry, it calls `PhxMediaLibrary.add/2 |> PhxMediaLibrary.to_collection/2`
   to store the file and create the database record.
 
-  Returns `{:ok, [Media.t()]}` with all successfully created media items,
+  Returns `{:ok, [MediaItem.t()]}` with all successfully created media items,
   or `{:error, reason}` if any entry fails (already-consumed entries are
   still persisted — the error is for the first failure encountered).
 
@@ -254,7 +254,7 @@ defmodule PhxMediaLibrary.LiveUpload do
           Ecto.Schema.t(),
           atom(),
           keyword()
-        ) :: {:ok, [Media.t()]} | {:error, term()}
+        ) :: {:ok, [MediaItem.t()]} | {:error, term()}
   def consume_media(socket, upload_name, model, collection_name, opts \\ []) do
     disk = Keyword.get(opts, :disk)
     custom_properties = Keyword.get(opts, :custom_properties, %{})
@@ -280,7 +280,7 @@ defmodule PhxMediaLibrary.LiveUpload do
     {successes, failures} =
       Enum.split_with(results, fn
         {:error, _} -> false
-        %Media{} -> true
+        %MediaItem{} -> true
         _ -> true
       end)
 
@@ -309,7 +309,7 @@ defmodule PhxMediaLibrary.LiveUpload do
       {:ok, media_items} = consume_media(socket, :images, post, :images)
       socket = stream_media_items(socket, :media, media_items)
   """
-  @spec stream_media_items(Phoenix.LiveView.Socket.t(), atom(), [Media.t()]) ::
+  @spec stream_media_items(Phoenix.LiveView.Socket.t(), atom(), [MediaItem.t()]) ::
           Phoenix.LiveView.Socket.t()
   def stream_media_items(socket, stream_name, media_items) when is_list(media_items) do
     Enum.reduce(media_items, socket, fn media, sock ->
@@ -318,7 +318,10 @@ defmodule PhxMediaLibrary.LiveUpload do
   end
 
   @doc """
-  Deletes a media item by its ID and removes its files from storage.
+  Deletes a media item by its UUID from a model's JSONB collection.
+
+  Removes the item from the model's JSONB column and deletes all associated
+  files (original, conversions, responsive variants) from storage.
 
   Returns `:ok` on success, `{:error, :not_found}` if the media doesn't
   exist, or `{:error, reason}` on failure.
@@ -329,36 +332,42 @@ defmodule PhxMediaLibrary.LiveUpload do
 
   ## Examples
 
-      case delete_media_by_id(media_id) do
-        :ok -> {:noreply, stream_delete_by_dom_id(socket, :media, "media-\#{media_id}")}
+      case delete_media_by_uuid(post, :images, uuid) do
+        :ok -> {:noreply, stream_delete_by_dom_id(socket, :media, "media-\#{uuid}")}
         {:error, reason} -> {:noreply, put_flash(socket, :error, inspect(reason))}
       end
 
       # With notification
-      case delete_media_by_id(media_id, notify: self()) do
-        :ok -> {:noreply, stream_delete_by_dom_id(socket, :media, "media-\#{media_id}")}
+      case delete_media_by_uuid(post, :images, uuid, notify: self()) do
+        :ok -> {:noreply, stream_delete_by_dom_id(socket, :media, "media-\#{uuid}")}
         {:error, reason} -> {:noreply, put_flash(socket, :error, inspect(reason))}
       end
   """
-  @spec delete_media_by_id(String.t(), keyword()) :: :ok | {:error, term()}
-  def delete_media_by_id(id, opts \\ []) do
-    repo = Config.repo()
+  @spec delete_media_by_uuid(Ecto.Schema.t(), atom(), String.t(), keyword()) ::
+          :ok | {:error, term()}
+  def delete_media_by_uuid(model, collection_name, uuid, opts \\ []) do
     notify_pid = Keyword.get(opts, :notify)
 
-    case repo.get(Media, id) do
-      nil ->
-        {:error, :not_found}
+    case PhxMediaLibrary.delete_media(model, collection_name, uuid) do
+      {:ok, media} ->
+        maybe_notify(notify_pid, {:media_removed, media})
+        :ok
 
-      media ->
-        case Media.delete(media) do
-          :ok ->
-            maybe_notify(notify_pid, {:media_removed, media})
-            :ok
-
-          error ->
-            error
-        end
+      {:error, _} = error ->
+        error
     end
+  end
+
+  @doc """
+  Deprecated. Use `delete_media_by_uuid/4` instead.
+
+  This function cannot work with JSONB-based storage because it lacks
+  the model and collection context needed to locate the item.
+  """
+  @deprecated "Use delete_media_by_uuid/4 instead"
+  @spec delete_media_by_id(String.t(), keyword()) :: :ok | {:error, term()}
+  def delete_media_by_id(_id, _opts \\ []) do
+    {:error, :deprecated_use_delete_media_by_uuid}
   end
 
   @doc """
@@ -444,14 +453,6 @@ defmodule PhxMediaLibrary.LiveUpload do
   # ---------------------------------------------------------------------------
   # Private helpers
   # ---------------------------------------------------------------------------
-
-  defp get_collection_config(model, collection_name) do
-    if function_exported?(model.__struct__, :get_media_collection, 1) do
-      model.__struct__.get_media_collection(collection_name)
-    else
-      nil
-    end
-  end
 
   defp maybe_put_accept(opts, %Collection{accepts: accepts})
        when is_list(accepts) and accepts != [] do

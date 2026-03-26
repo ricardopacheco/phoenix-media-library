@@ -1,12 +1,6 @@
 defmodule PhxMediaLibrary.AsyncProcessor.Task do
   @moduledoc """
-  Default async processor using Task.Supervisor.
-
-  This provides simple async processing without requiring external dependencies.
-  Note that tasks are not persisted - if the application crashes, pending
-  conversions will be lost.
-
-  For production apps that need reliability, consider using the Oban adapter.
+  Task-based async processor. Processes conversions in a background Task.
   """
 
   @behaviour PhxMediaLibrary.AsyncProcessor
@@ -14,17 +8,17 @@ defmodule PhxMediaLibrary.AsyncProcessor.Task do
   alias PhxMediaLibrary.Conversions
 
   @impl true
-  def process_async(media, conversions) do
+  def process_async(context, conversions) do
     Task.Supervisor.start_child(
       PhxMediaLibrary.TaskSupervisor,
-      fn -> Conversions.process(media, conversions) end
+      fn -> Conversions.process(context, conversions) end
     )
 
     :ok
   end
 
   @impl true
-  def process_sync(media, conversions) do
-    Conversions.process(media, conversions)
+  def process_sync(context, conversions) do
+    Conversions.process(context, conversions)
   end
 end

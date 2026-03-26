@@ -48,7 +48,6 @@ defmodule PhxMediaLibrary.Components do
   use Phoenix.Component
 
   alias PhxMediaLibrary.LiveUpload
-  alias PhxMediaLibrary.Media
 
   # ---------------------------------------------------------------------------
   # media_upload component
@@ -649,13 +648,13 @@ defmodule PhxMediaLibrary.Components do
             type="button"
             phx-click={
               if @confirm_delete do
-                Phoenix.LiveView.JS.push(@delete_event, value: %{id: @media.id})
+                Phoenix.LiveView.JS.push(@delete_event, value: %{id: @media.uuid})
                 |> Phoenix.LiveView.JS.exec("data-confirm", to: "body")
               else
                 @delete_event
               end
             }
-            phx-value-id={unless @confirm_delete, do: @media.id}
+            phx-value-id={unless @confirm_delete, do: @media.uuid}
             phx-target={@delete_target}
             data-confirm={if @confirm_delete, do: @confirm_message}
             class={[
@@ -805,10 +804,6 @@ defmodule PhxMediaLibrary.Components do
     value = bytes / divisor
     formatted = :erlang.float_to_binary(Float.round(value, 1), decimals: 1)
     "#{formatted} #{unit}"
-  end
-
-  defp image_media?(%Media{mime_type: mime_type}) when is_binary(mime_type) do
-    String.starts_with?(mime_type, "image/")
   end
 
   defp image_media?(%{mime_type: mime_type}) when is_binary(mime_type) do

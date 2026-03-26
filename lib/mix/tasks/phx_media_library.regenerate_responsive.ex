@@ -1,37 +1,33 @@
 defmodule Mix.Tasks.PhxMediaLibrary.RegenerateResponsive do
   @moduledoc """
-  Regenerates responsive images for existing media.
+  Regenerates responsive images from JSONB data on parent schemas.
 
-  This task is useful when:
-  - You've changed responsive image configuration
-  - You've added responsive images to existing media that didn't have them
-  - Responsive images were corrupted or deleted
+  This task loads records from a specified schema, extracts image media items
+  (mime_type starting with "image/") from the JSONB column, regenerates
+  responsive image variants, and updates the JSONB data.
 
   ## Usage
 
-      # Regenerate for all media
-      $ mix phx_media_library.regenerate_responsive
+      # Regenerate responsive images for a model
+      $ mix phx_media_library.regenerate_responsive --model MyApp.Post
 
-      # Regenerate for specific collection
-      $ mix phx_media_library.regenerate_responsive --collection images
+      # Regenerate for a specific collection
+      $ mix phx_media_library.regenerate_responsive --model MyApp.Post --collection images
 
       # Dry run
-      $ mix phx_media_library.regenerate_responsive --dry-run
+      $ mix phx_media_library.regenerate_responsive --model MyApp.Post --dry-run
 
   ## Options
 
+      --model         Schema module to process (required)
       --collection    Only regenerate for this collection
-      --model         Only regenerate for this model type
-      --dry-run       Show what would be regenerated
-      --batch-size    Number to process at once (default: 50)
+      --dry-run       Show what would be regenerated without doing it
 
   """
 
   @shortdoc "Regenerates responsive images"
 
   use Mix.Task
-
-  import Ecto.Query
 
   @impl Mix.Task
   def run(args) do
@@ -40,14 +36,26 @@ defmodule Mix.Tasks.PhxMediaLibrary.RegenerateResponsive do
         strict: [
           collection: :string,
           model: :string,
-          dry_run: :boolean,
-          batch_size: :integer
+          dry_run: :boolean
         ]
       )
 
+    unless opts[:model] do
+      Mix.shell().error("Missing required --model option.")
+      Mix.shell().error("Usage: mix phx_media_library.regenerate_responsive --model MyApp.Post")
+      exit(:shutdown)
+    end
+
     Mix.Task.run("app.start")
 
+    model_module = Module.concat([opts[:model]])
+    collection_filter = opts[:collection]
     dry_run? = opts[:dry_run] || false
+
+    unless function_exported?(model_module, :__media_column__, 0) do
+      Mix.shell().error("#{inspect(model_module)} does not export __media_column__/0")
+      exit(:shutdown)
+    end
 
     Mix.shell().info("""
 
@@ -56,53 +64,96 @@ defmodule Mix.Tasks.PhxMediaLibrary.RegenerateResponsive do
     """)
 
     if dry_run? do
-      Mix.shell().info("#{IO.ANSI.yellow()}DRY RUN#{IO.ANSI.reset()}\n")
+      Mix.shell().info("#{IO.ANSI.yellow()}DRY RUN - no changes will be made#{IO.ANSI.reset()}\n")
     end
 
     repo = PhxMediaLibrary.Config.repo()
-    query = build_responsive_query(opts[:collection], opts[:model])
-    total = repo.aggregate(query, :count)
+    column = model_module.__media_column__()
+    owner_type = PhxMediaLibrary.Helpers.owner_type_for_module(model_module)
+    records = repo.all(model_module)
+
+    items = collect_image_items(records, column, owner_type, collection_filter)
+    total = length(items)
+
     Mix.shell().info("Found #{total} image(s) to process\n")
 
-    query
-    |> repo.all()
-    |> Enum.with_index(1)
-    |> Enum.each(&process_item(&1, total, dry_run?, repo))
+    if total == 0 do
+      Mix.shell().info("#{IO.ANSI.green()}Nothing to regenerate.#{IO.ANSI.reset()}")
+    else
+      items
+      |> Enum.with_index(1)
+      |> Enum.each(fn {{record, item}, index} ->
+        process_item(record, item, model_module, column, dry_run?, repo, index, total)
+      end)
 
-    Mix.shell().info("\n#{IO.ANSI.green()}✓ Complete!#{IO.ANSI.reset()}")
+      Mix.shell().info("\n#{IO.ANSI.green()}Regeneration complete!#{IO.ANSI.reset()}")
+    end
   end
 
-  defp build_responsive_query(collection, model) do
-    query =
-      from(m in PhxMediaLibrary.Media,
-        where: like(m.mime_type, "image/%"),
-        order_by: [asc: m.inserted_at]
-      )
+  defp collect_image_items(records, column, owner_type, collection_filter) do
+    Enum.flat_map(records, fn record ->
+      data = Map.get(record, column) || %{}
+      owner_id = to_string(record.id)
 
-    query = if collection, do: where(query, [m], m.collection_name == ^collection), else: query
-    if model, do: where(query, [m], m.mediable_type == ^model), else: query
+      items =
+        if collection_filter do
+          PhxMediaLibrary.MediaData.get_collection(data, collection_filter,
+            owner_type: owner_type,
+            owner_id: owner_id
+          )
+        else
+          PhxMediaLibrary.MediaData.all_items(data,
+            owner_type: owner_type,
+            owner_id: owner_id
+          )
+        end
+
+      # Only include image media items
+      items
+      |> Enum.filter(&image?/1)
+      |> Enum.map(&{record, &1})
+    end)
   end
 
-  defp process_item({media, index}, total, true = _dry_run?, _repo) do
-    Mix.shell().info("[#{index}/#{total}] Would regenerate: #{media.file_name}")
+  defp image?(%{mime_type: mime_type}) when is_binary(mime_type) do
+    String.starts_with?(mime_type, "image/")
   end
 
-  defp process_item({media, index}, total, false = _dry_run?, repo) do
-    Mix.shell().info("[#{index}/#{total}] Processing: #{media.file_name}")
+  defp image?(_), do: false
 
-    case PhxMediaLibrary.ResponsiveImages.generate_all(media) do
+  defp process_item(_record, item, _model_module, _column, true = _dry_run?, _repo, index, total) do
+    Mix.shell().info("[#{index}/#{total}] Would regenerate: #{item.file_name}")
+  end
+
+  defp process_item(record, item, model_module, column, false = _dry_run?, repo, index, total) do
+    Mix.shell().info("[#{index}/#{total}] Processing: #{item.file_name}")
+
+    case PhxMediaLibrary.ResponsiveImages.generate_all(item) do
       {:ok, responsive_data} ->
-        update_responsive_images(media, responsive_data, repo)
-        Mix.shell().info("  #{IO.ANSI.green()}✓ Done#{IO.ANSI.reset()}")
+        update_responsive_images(record, item, model_module, column, responsive_data, repo)
+        Mix.shell().info("  #{IO.ANSI.green()}Done#{IO.ANSI.reset()}")
 
       {:error, reason} ->
         Mix.shell().error("  #{IO.ANSI.red()}Error: #{inspect(reason)}#{IO.ANSI.reset()}")
     end
   end
 
-  defp update_responsive_images(media, responsive_data, repo) do
-    media
-    |> Ecto.Changeset.change(responsive_images: responsive_data)
+  defp update_responsive_images(record, item, model_module, column, responsive_data, repo) do
+    # Reload the record to get fresh data
+    fresh = repo.get!(model_module, record.id)
+    current_data = Map.get(fresh, column) || %{}
+
+    updated_data =
+      PhxMediaLibrary.MediaData.update_item(
+        current_data,
+        item.collection_name,
+        item.uuid,
+        fn i -> %{i | responsive_images: responsive_data} end
+      )
+
+    fresh
+    |> Ecto.Changeset.change(%{column => updated_data})
     |> repo.update!()
   end
+
 end

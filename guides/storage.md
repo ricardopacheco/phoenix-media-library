@@ -199,17 +199,17 @@ relying on global config.
 PhxMediaLibrary stores files using a predictable path convention:
 
 ```
-{collection}/{mediable_id}/{filename}
-{collection}/{mediable_id}/conversions/{conversion_name}/{filename}
-{collection}/{mediable_id}/responsive/{filename}-{width}.{ext}
+{owner_type}/{owner_id}/{uuid}/{filename}
+{owner_type}/{owner_id}/{uuid}/conversions/{conversion_name}/{filename}
+{owner_type}/{owner_id}/{uuid}/responsive/{filename}-{width}.{ext}
 ```
 
 For example:
 
 ```
-images/42/photo.jpg
-images/42/conversions/thumb/photo.jpg
-images/42/responsive/photo-320.jpg
+posts/42/a1b2c3d4/photo.jpg
+posts/42/a1b2c3d4/conversions/thumb/photo.jpg
+posts/42/a1b2c3d4/responsive/photo-320.jpg
 ```
 
 Original filenames provided by users are sanitized for safety. The original

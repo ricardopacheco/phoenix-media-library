@@ -1,4 +1,4 @@
-This is an Elixir library for associating media files with Ecto schemas, inspired by Spatie's Laravel Media Library.
+This is an Elixir library for associating media files with Ecto schemas. Originally inspired by Spatie's Laravel Media Library, the storage architecture follows a JSONB-embedded approach inspired by [Shrine](https://shrinerb.com/).
 
 ## Project overview
 
@@ -23,12 +23,12 @@ PhxMediaLibrary provides a simple, fluent API for:
 - **Use behaviours** for extensibility (storage adapters, image processors, etc.)
 - **Keep dependencies minimal** - make heavy dependencies optional where feasible
 - **Write comprehensive documentation** - every public function needs `@doc` and `@spec`
-- **Design fluent APIs** that are pleasant to use, similar to Spatie's approach:
+- **Design fluent APIs** that are pleasant to use:
 
       post
-      |> Media.add(upload)
-      |> Media.to_collection("images")
-      |> Media.with_conversions([:thumb, :preview])
+      |> PhxMediaLibrary.add(upload)
+      |> PhxMediaLibrary.with_custom_properties(%{"alt" => "Sunset"})
+      |> PhxMediaLibrary.to_collection(:images)
 
 ### Documentation guidelines
 
@@ -128,20 +128,101 @@ PhxMediaLibrary provides a simple, fluent API for:
 
 ## Ecto guidelines
 
-- **Always** preload Ecto associations in queries when they'll be accessed together
 - `Ecto.Schema` fields always use the `:string` type, even for `:text` columns, ie: `field :name, :string`
 - `Ecto.Changeset.validate_number/2` **DOES NOT SUPPORT the `:allow_nil` option**. By default, Ecto validations only run if a change for the given field exists and the change value is not nil, so such an option is never needed
 - You **must** use `Ecto.Changeset.get_field(changeset, :field)` to access changeset fields
 - Fields which are set programmatically, such as `user_id`, must not be listed in `cast` calls for security purposes. Instead they must be explicitly set when creating the struct
 - **Always** invoke `mix ecto.gen.migration migration_name_using_underscores` when generating migration files, so the correct timestamp and conventions are applied
 
-### Media library Ecto patterns
+### Media library Ecto patterns — JSONB-embedded storage (Shrine-inspired)
 
-- Design the media schema to be **polymorphic** - it should associate with any user schema via `belongs_to :mediable, ... , polymorphic: true` or similar pattern
-- Store file metadata (size, mime type, dimensions) in the database for querying
-- Use **JSON columns** for flexible metadata storage (custom properties, responsive image data)
-- Provide migration generators for users to create the media table in their apps
-- Consider soft deletes for media records to allow recovery
+The library uses a **JSONB column approach** inspired by [Shrine](https://shrinerb.com/) instead of a
+separate polymorphic `media` table. Each schema that needs media stores its own media data in a JSONB
+column, eliminating JOINs and improving read performance.
+
+#### Core principles
+
+- **No separate `media` table** — media data lives inside the schema that owns it (e.g., `posts.media_data`)
+- **Column name is configurable per schema** — defaults to `media_data`, but each schema can choose its own column name via the `use PhxMediaLibrary.HasMedia` options
+- **Collections are top-level keys** in the JSONB — each collection (`:images`, `:avatar`, `:documents`) is a key in the JSON object, holding an array of media items
+- **Soft deletes are at the parent record level** — when the parent record (e.g., a Post) is soft-deleted (`deleted_at` set), the JSONB with all media data stays intact. Physical files in storage are only removed when the parent record is **hard-deleted** (removed from the database)
+- **Conversion status is tracked within each media item** — the `generated_conversions` map inside each JSONB media entry tracks which conversions have been processed, following the same pattern as before
+
+#### JSONB structure
+
+```json
+{
+  "images": [
+    {
+      "uuid": "a1b2c3d4",
+      "name": "photo",
+      "file_name": "photo.jpg",
+      "mime_type": "image/jpeg",
+      "disk": "local",
+      "size": 123456,
+      "checksum": "e3b0c44298fc1c14...",
+      "checksum_algorithm": "sha256",
+      "order": 0,
+      "custom_properties": {},
+      "metadata": {"width": 1920, "height": 1080},
+      "generated_conversions": {"thumb": true, "preview": true},
+      "responsive_images": {
+        "original": {"variants": [{"width": 320, "path": "..."}], "placeholder": {"data_uri": "..."}}
+      },
+      "inserted_at": "2024-01-01T00:00:00Z"
+    }
+  ],
+  "avatar": [...],
+  "documents": [...]
+}
+```
+
+#### Key differences from polymorphic table approach
+
+- **No `mediable_type` / `mediable_id`** — ownership is implicit (the JSONB lives inside the owning record)
+- **Reads are faster** — no JOIN needed, a single query to `posts` returns everything including media
+- **Writes to individual media items are more complex** — updating a single item (e.g., marking a conversion as done) requires `jsonb_set` or reading/modifying/writing the whole JSONB
+- **Querying across models** (e.g., "all images of type jpeg across all posts") uses GIN indexes on the JSONB column, which is acceptable but less performant than dedicated indexed columns
+
+#### Schema integration
+
+```elixir
+defmodule MyApp.Post do
+  use Ecto.Schema
+  use PhxMediaLibrary.HasMedia, column: :media_data  # configurable column name
+
+  schema "posts" do
+    field :title, :string
+    field :media_data, :map, default: %{}  # JSONB column
+
+    timestamps()
+  end
+
+  media_collections do
+    collection :images, max_files: 20 do
+      convert :thumb, width: 150, height: 150, fit: :cover
+      convert :preview, width: 800
+    end
+
+    collection :avatar, single_file: true do
+      convert :thumb, width: 150, height: 150
+    end
+  end
+end
+```
+
+#### Migration pattern
+
+Users add a JSONB column to their own tables instead of creating a separate `media` table:
+
+```elixir
+alter table(:posts) do
+  add :media_data, :map, default: %{}, null: false
+end
+
+# Optional: GIN index for querying within the JSONB
+create index(:posts, [:media_data], using: "GIN")
+```
 
 ## File and storage guidelines
 
@@ -155,7 +236,7 @@ PhxMediaLibrary provides a simple, fluent API for:
 
 ### Path conventions
 
-- Use a consistent, predictable path structure: `{collection}/{id}/{conversion}/{filename}`
+- Use a consistent, predictable path structure: `{owner_type}/{owner_id}/{uuid}/{filename}`
 - Make paths configurable but provide sensible defaults
 - Support both public and private file URLs
 - Generate **signed/expiring URLs** for private storage backends

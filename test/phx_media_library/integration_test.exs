@@ -3,13 +3,13 @@ defmodule PhxMediaLibrary.IntegrationTest do
   Integration tests that exercise the full media lifecycle against a real
   Postgres database. These tests verify:
 
-  - Adding media via file paths (the full `add → store → retrieve → delete` flow)
+  - Adding media via file paths (the full `add -> store -> retrieve -> delete` flow)
   - Collection validation (MIME types, single file, max files)
   - The `MediaAdder` pipeline end-to-end
   - Storage adapters with real files
   - Checksum computation and integrity verification
-  - Polymorphic type derivation and `has_many` preloading
-  - Query helpers (`media_query/2`, `get_media/2`, `get_first_media/2`)
+  - Polymorphic type derivation
+  - Query helpers (`get_media/2`, `get_first_media/2`)
   - Error paths (missing files, invalid types, storage failures)
   - The declarative DSL collections and conversions roundtrip
   """
@@ -18,7 +18,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
 
   @moduletag :db
 
-  alias PhxMediaLibrary.{Fixtures, Media, PathGenerator, Storage, TestRepo, Workers}
+  alias PhxMediaLibrary.{Fixtures, Media, MediaItem, PathGenerator, Storage, TestRepo, Workers}
 
   # Suppress noisy async conversion errors in test output.
   # The async processor fires for every upload but fails on non-image
@@ -63,9 +63,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
     defaults = %{title: "Integration Test Post", body: "Hello world"}
     merged = Map.merge(defaults, Map.new(attrs))
 
-    {id, _} = merged |> Map.pop(:id)
-
-    %PhxMediaLibrary.TestPost{id: id || Ecto.UUID.generate()}
+    %PhxMediaLibrary.TestPost{}
     |> Ecto.Changeset.change(Map.take(merged, [:title, :body]))
     |> TestRepo.insert!()
   end
@@ -107,13 +105,13 @@ defmodule PhxMediaLibrary.IntegrationTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Full lifecycle: add → store → retrieve → delete
+  # Full lifecycle: add -> store -> retrieve -> delete
   # ---------------------------------------------------------------------------
 
   describe "full media lifecycle" do
     setup :setup_disk_storage
 
-    test "add file → persist in DB → retrieve → delete", %{storage_dir: dir} do
+    test "add file -> persist -> retrieve -> delete", %{storage_dir: dir} do
       post = create_post!()
       content = "file content here"
       path = create_temp_file(content, "document.txt")
@@ -125,18 +123,17 @@ defmodule PhxMediaLibrary.IntegrationTest do
                |> PhxMediaLibrary.using_filename("document.txt")
                |> PhxMediaLibrary.to_collection(:documents, disk: :local)
 
-      # 2. Verify DB record
-      assert %Media{} = media
-      assert media.id != nil
+      # 2. Verify returned MediaItem
+      assert %MediaItem{} = media
       assert media.uuid != nil
       assert media.collection_name == "documents"
       assert media.file_name == "document.txt"
       assert media.mime_type == "text/plain"
       assert media.disk == "local"
       assert media.size == byte_size(content)
-      assert media.mediable_type == "posts"
-      assert media.mediable_id == post.id
-      assert media.order_column == 1
+      assert media.owner_type == "posts"
+      assert media.owner_id == to_string(post.id)
+      assert media.order == 0
 
       # 3. Verify the file was stored on disk
       stored_path = Path.join(dir, "posts/#{post.id}/#{media.uuid}/document.txt")
@@ -149,12 +146,13 @@ defmodule PhxMediaLibrary.IntegrationTest do
       expected_checksum = Media.compute_checksum(content, "sha256")
       assert media.checksum == expected_checksum
 
-      # 5. Retrieve via query helpers
+      # 5. Retrieve via query helpers (reload post to get updated JSONB)
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert [fetched] = PhxMediaLibrary.get_media(post, :documents)
-      assert fetched.id == media.id
+      assert fetched.uuid == media.uuid
 
       assert fetched_first = PhxMediaLibrary.get_first_media(post, :documents)
-      assert fetched_first.id == media.id
+      assert fetched_first.uuid == media.uuid
 
       # 6. Verify URL generation
       url = PhxMediaLibrary.url(media)
@@ -166,10 +164,11 @@ defmodule PhxMediaLibrary.IntegrationTest do
       assert full_path == stored_path
 
       # 8. Delete
-      assert :ok = PhxMediaLibrary.delete(media)
+      assert {:ok, _deleted} = PhxMediaLibrary.delete_media(post, :documents, media.uuid)
 
-      # Verify DB record removed
-      assert TestRepo.get(Media, media.id) == nil
+      # Verify media no longer returned (reload to get updated JSONB)
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert PhxMediaLibrary.get_media(post, :documents) == []
 
       # Verify file removed from disk
       refute File.exists?(stored_path)
@@ -205,8 +204,9 @@ defmodule PhxMediaLibrary.IntegrationTest do
       assert media.custom_properties == custom
 
       # Reload from DB to ensure it was persisted
-      reloaded = TestRepo.get!(Media, media.id)
-      assert reloaded.custom_properties == custom
+      reloaded_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      [reloaded_media] = PhxMediaLibrary.get_media(reloaded_post, :documents)
+      assert reloaded_media.custom_properties == custom
     end
 
     test "to_collection! raises on error" do
@@ -244,7 +244,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
       assert {:ok, ^content} = Storage.Memory.get(relative_path, [])
 
       # Clean up
-      PhxMediaLibrary.delete(media)
+      PhxMediaLibrary.delete_media(post, :documents, media.uuid)
     end
   end
 
@@ -323,6 +323,9 @@ defmodule PhxMediaLibrary.IntegrationTest do
       # Add second avatar — should replace the first
       path2 = create_temp_file("avatar 2", "avatar2.jpg")
 
+      # Reload post to get updated media_data
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
       assert {:ok, media2} =
                post
                |> PhxMediaLibrary.add(path2)
@@ -330,12 +333,14 @@ defmodule PhxMediaLibrary.IntegrationTest do
                |> PhxMediaLibrary.to_collection(:avatar)
 
       # Only the second avatar should remain
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       avatars = PhxMediaLibrary.get_media(post, :avatar)
       assert length(avatars) == 1
-      assert hd(avatars).id == media2.id
+      assert hd(avatars).uuid == media2.uuid
 
-      # First one should be deleted from DB
-      assert TestRepo.get(Media, media1.id) == nil
+      # First one should not be in the JSONB data
+      uuids = Enum.map(avatars, & &1.uuid)
+      refute media1.uuid in uuids
     end
   end
 
@@ -344,9 +349,12 @@ defmodule PhxMediaLibrary.IntegrationTest do
       post = create_post!()
 
       # :gallery has max_files: 5
-      media_ids =
+      uuids =
         for i <- 1..6 do
           path = create_temp_file("gallery image #{i}", "gallery_#{i}.jpg")
+
+          # Reload post for each iteration to get current media_data
+          post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
 
           {:ok, media} =
             post
@@ -354,18 +362,19 @@ defmodule PhxMediaLibrary.IntegrationTest do
             |> PhxMediaLibrary.using_filename("gallery_#{i}.jpg")
             |> PhxMediaLibrary.to_collection(:gallery)
 
-          media.id
+          media.uuid
         end
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       gallery = PhxMediaLibrary.get_media(post, :gallery)
 
       # Should have at most 5 items
       assert length(gallery) <= 5
 
       # The most recently added items should be present
-      latest_id = List.last(media_ids)
-      gallery_ids = Enum.map(gallery, & &1.id)
-      assert latest_id in gallery_ids
+      latest_uuid = List.last(uuids)
+      gallery_uuids = Enum.map(gallery, & &1.uuid)
+      assert latest_uuid in gallery_uuids
     end
   end
 
@@ -374,36 +383,42 @@ defmodule PhxMediaLibrary.IntegrationTest do
   # ---------------------------------------------------------------------------
 
   describe "media ordering" do
-    test "assigns incrementing order_column values" do
+    test "assigns incrementing order values" do
       post = create_post!()
 
       for i <- 1..3 do
         path = create_temp_file("file #{i}", "file_#{i}.txt")
 
+        # Reload post to get updated media_data
+        current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
         {:ok, media} =
-          post
+          current_post
           |> PhxMediaLibrary.add(path)
           |> PhxMediaLibrary.using_filename("file_#{i}.txt")
           |> PhxMediaLibrary.to_collection(:images)
 
-        assert media.order_column == i
+        assert media.order == i - 1
       end
     end
 
-    test "get_media returns items ordered by order_column" do
+    test "get_media returns items ordered by order" do
       post = create_post!()
 
       for i <- 1..3 do
         path = create_temp_file("ordered file #{i}", "ordered_#{i}.txt")
 
-        post
+        current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+        current_post
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.using_filename("ordered_#{i}.txt")
         |> PhxMediaLibrary.to_collection(:images)
       end
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       items = PhxMediaLibrary.get_media(post, :images)
-      orders = Enum.map(items, & &1.order_column)
+      orders = Enum.map(items, & &1.order)
 
       assert orders == Enum.sort(orders)
     end
@@ -426,9 +441,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.using_filename("integrity.txt")
         |> PhxMediaLibrary.to_collection(:documents, disk: :local)
-
-      # Reload from DB
-      media = TestRepo.get!(Media, media.id)
 
       assert media.checksum == Media.compute_checksum(content, "sha256")
       assert media.checksum_algorithm == "sha256"
@@ -463,9 +475,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
       assert File.exists?(stored_path), "stored file must exist before tampering"
       File.write!(stored_path, "tampered content!!!")
 
-      # Reload the media from DB to make sure we have the stored checksum
-      media = TestRepo.get!(Media, media.id)
-
       assert {:error, :checksum_mismatch} = Media.verify_integrity(media)
     end
 
@@ -486,6 +495,8 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.using_filename("file_a.txt")
         |> PhxMediaLibrary.to_collection(:images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
       {:ok, media2} =
         post
         |> PhxMediaLibrary.add(path2)
@@ -500,8 +511,8 @@ defmodule PhxMediaLibrary.IntegrationTest do
   # Polymorphic type derivation
   # ---------------------------------------------------------------------------
 
-  describe "polymorphic mediable_type" do
-    test "derives mediable_type from Ecto table name" do
+  describe "polymorphic owner_type" do
+    test "derives owner_type from Ecto table name" do
       post = create_post!()
       path = create_temp_file("type test", "type.txt")
 
@@ -511,15 +522,15 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.using_filename("type.txt")
         |> PhxMediaLibrary.to_collection(:images)
 
-      # TestPost schema uses `schema "posts"` so mediable_type should be "posts"
-      assert media.mediable_type == "posts"
+      # TestPost schema uses `schema "posts"` so owner_type should be "posts"
+      assert media.owner_type == "posts"
     end
 
     test "__media_type__/0 is defined on TestPost" do
       assert PhxMediaLibrary.TestPost.__media_type__() == "posts"
     end
 
-    test "media is scoped by mediable_type and mediable_id" do
+    test "media is scoped by owner_type and owner_id" do
       post1 = create_post!(%{title: "Post 1"})
       post2 = create_post!(%{title: "Post 2"})
 
@@ -539,201 +550,19 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.to_collection(:images)
 
       # Each post should only see its own media
+      post1 = TestRepo.get!(PhxMediaLibrary.TestPost, post1.id)
       assert [m1] = PhxMediaLibrary.get_media(post1, :images)
-      assert m1.id == media1.id
+      assert m1.uuid == media1.uuid
 
+      post2 = TestRepo.get!(PhxMediaLibrary.TestPost, post2.id)
       assert [m2] = PhxMediaLibrary.get_media(post2, :images)
-      assert m2.id == media2.id
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # has_many preloading
-  # ---------------------------------------------------------------------------
-
-  describe "has_many :media preloading" do
-    test "Repo.preload(post, :media) loads all media" do
-      post = create_post!()
-
-      path1 = create_temp_file("media 1", "file1.txt")
-      path2 = create_temp_file("media 2", "file2.txt")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path1)
-        |> PhxMediaLibrary.using_filename("file1.txt")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path2)
-        |> PhxMediaLibrary.using_filename("file2.txt")
-        |> PhxMediaLibrary.to_collection(:documents)
-
-      post = TestRepo.preload(post, :media)
-
-      assert length(post.media) == 2
-      assert Enum.all?(post.media, &(&1.mediable_id == post.id))
-    end
-
-    test "Repo.preload(post, :images) loads only images collection" do
-      post = create_post!()
-
-      path1 = create_temp_file("an image", "photo.jpg")
-      path2 = create_temp_file("a document", "readme.txt")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path1)
-        |> PhxMediaLibrary.using_filename("photo.jpg")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path2)
-        |> PhxMediaLibrary.using_filename("readme.txt")
-        |> PhxMediaLibrary.to_collection(:documents)
-
-      post = TestRepo.preload(post, :images)
-
-      assert length(post.images) == 1
-      assert hd(post.images).collection_name == "images"
-    end
-
-    test "preloading multiple collection-scoped associations" do
-      post = create_post!()
-
-      path1 = create_temp_file("img content", "img.jpg")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path1)
-        |> PhxMediaLibrary.using_filename("img.jpg")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      path2 = create_temp_file("doc content", "doc.pdf")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path2)
-        |> PhxMediaLibrary.using_filename("doc.pdf")
-        |> PhxMediaLibrary.to_collection(:documents)
-
-      path3 = create_temp_file("avatar content", "avatar.png")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path3)
-        |> PhxMediaLibrary.using_filename("avatar.png")
-        |> PhxMediaLibrary.to_collection(:avatar)
-
-      post = TestRepo.preload(post, [:media, :images, :documents, :avatar])
-
-      assert length(post.media) == 3
-      assert length(post.images) == 1
-      assert length(post.documents) == 1
-      assert length(post.avatar) == 1
-    end
-
-    test "preloading returns empty list when no media exists" do
-      post = create_post!()
-      post = TestRepo.preload(post, [:media, :images])
-
-      assert post.media == []
-      assert post.images == []
-    end
-
-    test "media from one post does not leak into another via preload" do
-      post1 = create_post!(%{title: "Post A"})
-      post2 = create_post!(%{title: "Post B"})
-
-      path = create_temp_file("only for post1", "exclusive.txt")
-
-      {:ok, _} =
-        post1
-        |> PhxMediaLibrary.add(path)
-        |> PhxMediaLibrary.using_filename("exclusive.txt")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      post1 = TestRepo.preload(post1, :media)
-      post2 = TestRepo.preload(post2, :media)
-
-      assert length(post1.media) == 1
-      assert post2.media == []
+      assert m2.uuid == media2.uuid
     end
   end
 
   # ---------------------------------------------------------------------------
   # Query helpers
   # ---------------------------------------------------------------------------
-
-  describe "media_query/2" do
-    test "returns composable Ecto.Query for all media" do
-      post = create_post!()
-
-      path = create_temp_file("query test", "query.txt")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path)
-        |> PhxMediaLibrary.using_filename("query.txt")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      query = PhxMediaLibrary.media_query(post)
-      assert %Ecto.Query{} = query
-
-      results = TestRepo.all(query)
-      assert length(results) == 1
-    end
-
-    test "filters by collection name when provided" do
-      post = create_post!()
-
-      for {collection, filename} <- [{:images, "img.jpg"}, {:documents, "doc.pdf"}] do
-        path = create_temp_file("#{collection} content", filename)
-
-        post
-        |> PhxMediaLibrary.add(path)
-        |> PhxMediaLibrary.using_filename(filename)
-        |> PhxMediaLibrary.to_collection(collection)
-      end
-
-      images_query = PhxMediaLibrary.media_query(post, :images)
-      assert length(TestRepo.all(images_query)) == 1
-
-      all_query = PhxMediaLibrary.media_query(post)
-      assert length(TestRepo.all(all_query)) == 2
-    end
-
-    test "query is composable with additional where clauses" do
-      post = create_post!()
-
-      path1 = create_temp_file("jpeg content", "photo.jpg")
-      path2 = create_temp_file("png content", "icon.png")
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path1)
-        |> PhxMediaLibrary.using_filename("photo.jpg")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      {:ok, _} =
-        post
-        |> PhxMediaLibrary.add(path2)
-        |> PhxMediaLibrary.using_filename("icon.png")
-        |> PhxMediaLibrary.to_collection(:images)
-
-      # Filter further by mime_type
-      query =
-        post
-        |> PhxMediaLibrary.media_query(:images)
-        |> where([m], m.mime_type == "image/png")
-
-      results = TestRepo.all(query)
-      assert length(results) == 1
-      assert hd(results).mime_type == "image/png"
-    end
-  end
 
   describe "get_media/2 and get_first_media/2" do
     test "get_media returns all media for a collection" do
@@ -742,12 +571,15 @@ defmodule PhxMediaLibrary.IntegrationTest do
       for i <- 1..3 do
         path = create_temp_file("item #{i}", "item_#{i}.txt")
 
-        post
+        current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+        current_post
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.using_filename("item_#{i}.txt")
         |> PhxMediaLibrary.to_collection(:images)
       end
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       media = PhxMediaLibrary.get_media(post, :images)
       assert length(media) == 3
     end
@@ -756,18 +588,21 @@ defmodule PhxMediaLibrary.IntegrationTest do
       post = create_post!()
 
       path1 = create_temp_file("img", "img.jpg")
-      path2 = create_temp_file("doc", "doc.pdf")
 
       post
       |> PhxMediaLibrary.add(path1)
       |> PhxMediaLibrary.using_filename("img.jpg")
       |> PhxMediaLibrary.to_collection(:images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      path2 = create_temp_file("doc", "doc.pdf")
+
       post
       |> PhxMediaLibrary.add(path2)
       |> PhxMediaLibrary.using_filename("doc.pdf")
       |> PhxMediaLibrary.to_collection(:documents)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       all_media = PhxMediaLibrary.get_media(post)
       assert length(all_media) == 2
     end
@@ -776,7 +611,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
       post = create_post!()
 
       path1 = create_temp_file("first", "first.txt")
-      path2 = create_temp_file("second", "second.txt")
 
       {:ok, first_media} =
         post
@@ -784,14 +618,18 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.using_filename("first.txt")
         |> PhxMediaLibrary.to_collection(:images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      path2 = create_temp_file("second", "second.txt")
+
       {:ok, _second_media} =
         post
         |> PhxMediaLibrary.add(path2)
         |> PhxMediaLibrary.using_filename("second.txt")
         |> PhxMediaLibrary.to_collection(:images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       result = PhxMediaLibrary.get_first_media(post, :images)
-      assert result.id == first_media.id
+      assert result.uuid == first_media.uuid
     end
 
     test "get_first_media returns nil when collection is empty" do
@@ -811,6 +649,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.using_filename("url_test.txt")
         |> PhxMediaLibrary.to_collection(:images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       url = PhxMediaLibrary.get_first_media_url(post, :images)
       assert is_binary(url)
       assert url =~ "url_test"
@@ -841,12 +680,15 @@ defmodule PhxMediaLibrary.IntegrationTest do
       for i <- 1..3 do
         path = create_temp_file("image #{i}", "img_#{i}.jpg")
 
-        post
+        current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+        current_post
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.using_filename("img_#{i}.jpg")
         |> PhxMediaLibrary.to_collection(:images)
       end
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       path_doc = create_temp_file("a document", "doc.pdf")
 
       {:ok, doc_media} =
@@ -856,12 +698,14 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.to_collection(:documents)
 
       # Clear only images
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert {:ok, 3} = PhxMediaLibrary.clear_collection(post, :images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert PhxMediaLibrary.get_media(post, :images) == []
       # Documents should remain
       assert [remaining] = PhxMediaLibrary.get_media(post, :documents)
-      assert remaining.id == doc_media.id
+      assert remaining.uuid == doc_media.uuid
     end
   end
 
@@ -872,14 +716,18 @@ defmodule PhxMediaLibrary.IntegrationTest do
       for {collection, filename} <- [{:images, "img.jpg"}, {:documents, "doc.pdf"}] do
         path = create_temp_file("content", filename)
 
-        post
+        current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+        current_post
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.using_filename(filename)
         |> PhxMediaLibrary.to_collection(collection)
       end
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert {:ok, 2} = PhxMediaLibrary.clear_media(post)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert PhxMediaLibrary.get_media(post) == []
     end
   end
@@ -930,10 +778,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
   # ---------------------------------------------------------------------------
 
   describe "DSL-configured schema integration" do
-    # The DSLPost defined in has_media_dsl_test.exs uses the DSL.
-    # We verify that media_collections/0 and media_conversions/0 return
-    # the correct structs when used with the TestPost (which uses function style).
-
     test "TestPost collections are queryable after DB insert" do
       post = create_post!()
 
@@ -990,8 +834,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
       post = create_post!()
 
       path_img = create_temp_file("image data", "photo.jpg")
-      path_doc = create_temp_file("document data", "report.pdf")
-      path_avatar = create_temp_file("avatar data", "me.png")
 
       {:ok, img} =
         post
@@ -999,11 +841,17 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.using_filename("photo.jpg")
         |> PhxMediaLibrary.to_collection(:images)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      path_doc = create_temp_file("document data", "report.pdf")
+
       {:ok, doc} =
         post
         |> PhxMediaLibrary.add(path_doc)
         |> PhxMediaLibrary.using_filename("report.pdf")
         |> PhxMediaLibrary.to_collection(:documents)
+
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      path_avatar = create_temp_file("avatar data", "me.png")
 
       {:ok, avatar} =
         post
@@ -1011,19 +859,21 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.using_filename("me.png")
         |> PhxMediaLibrary.to_collection(:avatar)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
       images = PhxMediaLibrary.get_media(post, :images)
       documents = PhxMediaLibrary.get_media(post, :documents)
       avatars = PhxMediaLibrary.get_media(post, :avatar)
       all = PhxMediaLibrary.get_media(post)
 
       assert length(images) == 1
-      assert hd(images).id == img.id
+      assert hd(images).uuid == img.uuid
 
       assert length(documents) == 1
-      assert hd(documents).id == doc.id
+      assert hd(documents).uuid == doc.uuid
 
       assert length(avatars) == 1
-      assert hd(avatars).id == avatar.id
+      assert hd(avatars).uuid == avatar.uuid
 
       assert length(all) == 3
     end
@@ -1068,7 +918,8 @@ defmodule PhxMediaLibrary.IntegrationTest do
       stored_path = PhxMediaLibrary.path(media)
       assert File.exists?(stored_path)
 
-      PhxMediaLibrary.delete(media)
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      PhxMediaLibrary.delete_media(post, :images, media.uuid)
 
       refute File.exists?(stored_path)
     end
@@ -1093,88 +944,19 @@ defmodule PhxMediaLibrary.IntegrationTest do
   end
 
   # ---------------------------------------------------------------------------
-  # Media changeset and DB constraints
-  # ---------------------------------------------------------------------------
-
-  describe "Media changeset with real DB" do
-    test "rejects records with missing required fields" do
-      changeset = Media.changeset(%Media{}, %{})
-      assert {:error, changeset} = TestRepo.insert(changeset)
-      refute changeset.valid?
-    end
-
-    test "enforces unique UUID constraint" do
-      uuid = Ecto.UUID.generate()
-
-      attrs = %{
-        uuid: uuid,
-        collection_name: "images",
-        name: "test",
-        file_name: "test.jpg",
-        mime_type: "image/jpeg",
-        disk: "memory",
-        size: 100,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
-      }
-
-      assert {:ok, _} = %Media{} |> Media.changeset(attrs) |> TestRepo.insert()
-
-      assert {:error, changeset} =
-               %Media{}
-               |> Media.changeset(%{attrs | mediable_id: Ecto.UUID.generate()})
-               |> TestRepo.insert()
-
-      assert {"has already been taken", _} = changeset.errors[:uuid]
-    end
-
-    test "stores and retrieves JSON fields correctly" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "test",
-        name: "json-test",
-        file_name: "json-test.txt",
-        mime_type: "text/plain",
-        disk: "memory",
-        size: 42,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate(),
-        custom_properties: %{"key" => "value", "nested" => %{"a" => 1}},
-        generated_conversions: %{"thumb" => true, "preview" => false},
-        responsive_images: %{
-          "original" => %{
-            "variants" => [%{"width" => 320, "height" => 240, "path" => "test/320.jpg"}]
-          }
-        }
-      }
-
-      {:ok, media} = %Media{} |> Media.changeset(attrs) |> TestRepo.insert()
-
-      reloaded = TestRepo.get!(Media, media.id)
-      assert reloaded.custom_properties == %{"key" => "value", "nested" => %{"a" => 1}}
-      assert reloaded.generated_conversions == %{"thumb" => true, "preview" => false}
-      assert get_in(reloaded.responsive_images, ["original", "variants"]) |> length() == 1
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Fixtures helper integration
   # ---------------------------------------------------------------------------
 
   describe "Fixtures.create_media/1 with real DB" do
-    test "inserts a media record with defaults" do
+    test "inserts a media item with defaults" do
       media = Fixtures.create_media()
 
-      assert %Media{} = media
-      assert media.id != nil
-      assert media.collection_name == "default"
+      assert %MediaItem{} = media
+      assert media.uuid != nil
       assert media.disk == "memory"
-
-      reloaded = TestRepo.get!(Media, media.id)
-      assert reloaded.uuid == media.uuid
     end
 
-    test "inserts a media record with custom attributes" do
+    test "inserts a media item with custom attributes" do
       post = create_post!()
 
       media =
@@ -1183,31 +965,15 @@ defmodule PhxMediaLibrary.IntegrationTest do
           name: "custom-media",
           file_name: "custom.png",
           mime_type: "image/png",
-          mediable_type: "posts",
-          mediable_id: post.id,
+          post: post,
           checksum: "abc123",
           checksum_algorithm: "sha256"
         })
 
       assert media.collection_name == "images"
       assert media.mime_type == "image/png"
-      assert media.mediable_id == post.id
+      assert media.owner_id == to_string(post.id)
       assert media.checksum == "abc123"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # DataCase helper
-  # ---------------------------------------------------------------------------
-
-  describe "DataCase.errors_on/1" do
-    test "extracts errors from invalid changeset" do
-      changeset = Media.changeset(%Media{}, %{})
-      errors = errors_on(changeset)
-
-      assert "can't be blank" in errors[:uuid]
-      assert "can't be blank" in errors[:name]
-      assert "can't be blank" in errors[:file_name]
     end
   end
 
@@ -1223,7 +989,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
         end
 
       # Add media to each post
-      media_ids =
+      media_uuids =
         for post <- posts do
           filename = "file_#{post.id}.txt"
           path = create_temp_file("content for #{post.title}", filename)
@@ -1234,16 +1000,16 @@ defmodule PhxMediaLibrary.IntegrationTest do
             |> PhxMediaLibrary.using_filename(filename)
             |> PhxMediaLibrary.to_collection(:images)
 
-          {post.id, media.id}
+          {post.id, media.uuid}
         end
 
       # Each post should have exactly one media item
-      for {post_id, media_id} <- media_ids do
+      for {post_id, media_uuid} <- media_uuids do
         post = TestRepo.get!(PhxMediaLibrary.TestPost, post_id)
         media_items = PhxMediaLibrary.get_media(post, :images)
 
         assert length(media_items) == 1
-        assert hd(media_items).id == media_id
+        assert hd(media_items).uuid == media_uuid
       end
     end
   end
@@ -1359,8 +1125,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
 
       path = create_temp_file(png_data, "actually_png.jpg")
 
-      # :images collection has no MIME type restrictions, so this should succeed
-      # but the stored MIME type should be image/png (detected from content)
       {:ok, media} =
         post
         |> PhxMediaLibrary.add(path)
@@ -1376,8 +1140,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
       png_data = <<0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0x00, 0x00>>
       path = create_temp_file(png_data, "fake_doc.pdf")
 
-      # Content-based detection will detect image/png, which won't match
-      # the :documents collection accepts list
       result =
         post
         |> PhxMediaLibrary.add(path)
@@ -1424,34 +1186,38 @@ defmodule PhxMediaLibrary.IntegrationTest do
   # ---------------------------------------------------------------------------
 
   describe "reorder/3" do
-    test "reorders media items by ID list" do
+    test "reorders media items by UUID list" do
       post = create_post!()
 
-      ids =
+      uuids =
         for i <- 1..3 do
           path = create_temp_file("image #{i}", "img_#{i}.jpg")
 
+          current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
           {:ok, media} =
-            post
+            current_post
             |> PhxMediaLibrary.add(path)
             |> PhxMediaLibrary.using_filename("img_#{i}.jpg")
             |> PhxMediaLibrary.to_collection(:images)
 
-          media.id
+          media.uuid
         end
 
-      [id1, id2, id3] = ids
+      [uuid1, uuid2, uuid3] = uuids
 
-      # Reorder: id3, id1, id2
-      assert {:ok, 3} = PhxMediaLibrary.reorder(post, :images, [id3, id1, id2])
+      # Reorder: uuid3, uuid1, uuid2
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert {:ok, 3} = PhxMediaLibrary.reorder(post, :images, [uuid3, uuid1, uuid2])
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       reordered = PhxMediaLibrary.get_media(post, :images)
-      reordered_ids = Enum.map(reordered, & &1.id)
+      reordered_uuids = Enum.map(reordered, & &1.uuid)
 
-      assert reordered_ids == [id3, id1, id2]
+      assert reordered_uuids == [uuid3, uuid1, uuid2]
     end
 
-    test "reorder ignores IDs not in the collection" do
+    test "reorder ignores UUIDs not in the collection" do
       post = create_post!()
 
       path = create_temp_file("content", "file.jpg")
@@ -1461,14 +1227,16 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.to_collection(:images)
 
-      fake_id = Ecto.UUID.generate()
+      fake_uuid = Ecto.UUID.generate()
 
-      # Include a fake ID — it should be ignored (count reflects actual updates)
-      assert {:ok, count} = PhxMediaLibrary.reorder(post, :images, [fake_id, media.id])
+      # Include a fake UUID — it should be ignored
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert {:ok, count} = PhxMediaLibrary.reorder(post, :images, [fake_uuid, media.uuid])
       assert count == 1
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       [remaining] = PhxMediaLibrary.get_media(post, :images)
-      assert remaining.id == media.id
+      assert remaining.uuid == media.uuid
     end
 
     test "reorder with empty list is a no-op" do
@@ -1478,61 +1246,67 @@ defmodule PhxMediaLibrary.IntegrationTest do
     end
   end
 
-  describe "move_to/2" do
+  describe "move_to/4" do
     test "moves a media item to the first position" do
       post = create_post!()
 
-      ids =
+      uuids =
         for i <- 1..3 do
           path = create_temp_file("image #{i}", "img_#{i}.jpg")
 
+          current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
           {:ok, media} =
-            post
+            current_post
             |> PhxMediaLibrary.add(path)
             |> PhxMediaLibrary.using_filename("img_#{i}.jpg")
             |> PhxMediaLibrary.to_collection(:images)
 
-          media.id
+          media.uuid
         end
 
-      [_id1, _id2, id3] = ids
+      [_uuid1, _uuid2, uuid3] = uuids
 
       # Move the last item to position 1
-      last_media = TestRepo.get!(Media, id3)
-      assert {:ok, updated} = PhxMediaLibrary.move_to(last_media, 1)
-      assert updated.order_column == 1
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert {:ok, updated} = PhxMediaLibrary.move_to(post, :images, uuid3, 1)
+      assert updated.order == 0
 
       # Verify ordering
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       reordered = PhxMediaLibrary.get_media(post, :images)
-      assert hd(reordered).id == id3
+      assert hd(reordered).uuid == uuid3
     end
 
     test "moves a media item to the last position" do
       post = create_post!()
 
-      ids =
+      uuids =
         for i <- 1..3 do
           path = create_temp_file("image #{i}", "img_#{i}.jpg")
 
+          current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
           {:ok, media} =
-            post
+            current_post
             |> PhxMediaLibrary.add(path)
             |> PhxMediaLibrary.using_filename("img_#{i}.jpg")
             |> PhxMediaLibrary.to_collection(:images)
 
-          media.id
+          media.uuid
         end
 
-      [id1, _id2, _id3] = ids
+      [uuid1, _uuid2, _uuid3] = uuids
 
       # Move the first item to position 3
-      first_media = TestRepo.get!(Media, id1)
-      assert {:ok, updated} = PhxMediaLibrary.move_to(first_media, 3)
-      assert updated.order_column == 3
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert {:ok, updated} = PhxMediaLibrary.move_to(post, :images, uuid1, 3)
+      assert updated.order == 2
 
       # Verify it's last
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       reordered = PhxMediaLibrary.get_media(post, :images)
-      assert List.last(reordered).id == id1
+      assert List.last(reordered).uuid == uuid1
     end
 
     test "clamps position to collection size" do
@@ -1546,38 +1320,42 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.to_collection(:images)
 
       # Position 999 should clamp to 1 (only 1 item)
-      assert {:ok, updated} = PhxMediaLibrary.move_to(media, 999)
-      assert updated.order_column == 1
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert {:ok, updated} = PhxMediaLibrary.move_to(post, :images, media.uuid, 999)
+      assert updated.order == 0
     end
 
     test "moves to middle position" do
       post = create_post!()
 
-      ids =
+      uuids =
         for i <- 1..4 do
           path = create_temp_file("image #{i}", "img_#{i}.jpg")
 
+          current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
           {:ok, media} =
-            post
+            current_post
             |> PhxMediaLibrary.add(path)
             |> PhxMediaLibrary.using_filename("img_#{i}.jpg")
             |> PhxMediaLibrary.to_collection(:images)
 
-          media.id
+          media.uuid
         end
 
-      [id1, _id2, _id3, id4] = ids
+      [uuid1, _uuid2, _uuid3, uuid4] = uuids
 
-      # Move id4 (last) to position 2
-      last_media = TestRepo.get!(Media, id4)
-      assert {:ok, _updated} = PhxMediaLibrary.move_to(last_media, 2)
+      # Move uuid4 (last) to position 2
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert {:ok, _updated} = PhxMediaLibrary.move_to(post, :images, uuid4, 2)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       reordered = PhxMediaLibrary.get_media(post, :images)
-      reordered_ids = Enum.map(reordered, & &1.id)
+      reordered_uuids = Enum.map(reordered, & &1.uuid)
 
-      # id4 should now be at index 1 (position 2)
-      assert Enum.at(reordered_ids, 0) == id1
-      assert Enum.at(reordered_ids, 1) == id4
+      # uuid4 should now be at index 1 (position 2)
+      assert Enum.at(reordered_uuids, 0) == uuid1
+      assert Enum.at(reordered_uuids, 1) == uuid4
     end
   end
 
@@ -1626,10 +1404,9 @@ defmodule PhxMediaLibrary.IntegrationTest do
       assert metadata.source_type == :path
 
       assert_received {:telemetry, [:phx_media_library, :add, :stop], %{duration: duration},
-                       stop_metadata}
+                       _stop_metadata}
 
       assert duration > 0
-      assert %PhxMediaLibrary.Media{} = stop_metadata.media
     end
 
     test "emits :storage events during upload" do
@@ -1657,9 +1434,10 @@ defmodule PhxMediaLibrary.IntegrationTest do
       # Drain add/storage events
       flush_mailbox()
 
-      :ok = PhxMediaLibrary.delete(media)
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      {:ok, _} = PhxMediaLibrary.delete_media(post, :images, media.uuid)
 
-      assert_received {:telemetry, [:phx_media_library, :delete, :start], _, %{media: _}}
+      assert_received {:telemetry, [:phx_media_library, :delete, :start], _, _}
       assert_received {:telemetry, [:phx_media_library, :delete, :stop], %{duration: _}, _}
     end
 
@@ -1669,7 +1447,9 @@ defmodule PhxMediaLibrary.IntegrationTest do
       for i <- 1..2 do
         path = create_temp_file("item #{i}", "item_#{i}.txt")
 
-        post
+        current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+        current_post
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.to_collection(:images)
       end
@@ -1677,6 +1457,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
       # Drain add events
       flush_mailbox()
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       {:ok, 2} = PhxMediaLibrary.clear_collection(post, :images)
 
       assert_received {:telemetry, [:phx_media_library, :batch, :start], _,
@@ -1689,23 +1470,26 @@ defmodule PhxMediaLibrary.IntegrationTest do
     test "emits :batch events for reorder" do
       post = create_post!()
 
-      ids =
+      uuids =
         for i <- 1..2 do
           path = create_temp_file("image #{i}", "img_#{i}.jpg")
 
+          current_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
           {:ok, media} =
-            post
+            current_post
             |> PhxMediaLibrary.add(path)
             |> PhxMediaLibrary.to_collection(:images)
 
-          media.id
+          media.uuid
         end
 
       # Drain add events
       flush_mailbox()
 
-      [id1, id2] = ids
-      {:ok, 2} = PhxMediaLibrary.reorder(post, :images, [id2, id1])
+      [uuid1, uuid2] = uuids
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      {:ok, 2} = PhxMediaLibrary.reorder(post, :images, [uuid2, uuid1])
 
       assert_received {:telemetry, [:phx_media_library, :batch, :start], _,
                        %{operation: :reorder}}
@@ -1813,17 +1597,18 @@ defmodule PhxMediaLibrary.IntegrationTest do
       assert Map.has_key?(media.metadata, "extracted_at")
     end
 
-    test "metadata is persisted to the database" do
+    test "metadata is persisted to the JSONB column" do
       post = create_post!()
       path = create_temp_file("persistent metadata", "persist.txt")
 
-      {:ok, media} =
+      {:ok, _media} =
         post
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.to_collection(:documents)
 
-      # Reload from DB
-      reloaded = TestRepo.get!(Media, media.id)
+      # Reload from DB and read back
+      reloaded_post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      [reloaded] = PhxMediaLibrary.get_media(reloaded_post, :documents)
       assert reloaded.metadata["type"] == "document"
       assert reloaded.metadata["format"] == "text"
       assert Map.has_key?(reloaded.metadata, "extracted_at")
@@ -1938,7 +1723,7 @@ defmodule PhxMediaLibrary.IntegrationTest do
                |> PhxMediaLibrary.to_collection(:documents)
 
       # Upload succeeded even though extraction failed
-      assert media.id != nil
+      assert media.uuid != nil
       assert media.metadata == %{}
     end
 
@@ -2064,8 +1849,6 @@ defmodule PhxMediaLibrary.IntegrationTest do
   end
 
   describe "URL source_url in custom_properties" do
-    # We can't easily test a full URL download without a real HTTP server,
-    # but we can verify the source_url logic by checking adder construction
     test "add_from_url creates correct source tuple" do
       post = create_post!()
 
@@ -2167,21 +1950,23 @@ defmodule PhxMediaLibrary.IntegrationTest do
         |> PhxMediaLibrary.add(path)
         |> PhxMediaLibrary.to_collection(:documents)
 
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert {:ok, 1} = PhxMediaLibrary.clear_collection(post, :documents)
+
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
       assert PhxMediaLibrary.get_media(post, :documents) == []
     end
 
-    test "metadata field is included in media changeset" do
+    test "metadata field is included in media item" do
       # Verify we can create media with metadata directly
       media =
         Fixtures.create_media(%{
           metadata: %{"width" => 100, "height" => 200, "type" => "image"}
         })
 
-      reloaded = TestRepo.get!(Media, media.id)
-      assert reloaded.metadata["width"] == 100
-      assert reloaded.metadata["height"] == 200
-      assert reloaded.metadata["type"] == "image"
+      assert media.metadata["width"] == 100
+      assert media.metadata["height"] == 200
+      assert media.metadata["type"] == "image"
     end
 
     test "metadata defaults to empty map" do

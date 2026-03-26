@@ -111,7 +111,15 @@ mix phx_media_library.install
 mix ecto.migrate
 ```
 
-This generates the `media` table migration with all required fields.
+Use the `--table` option to specify which tables should receive a `media_data`
+JSONB column:
+
+```bash
+mix phx_media_library.install --table posts --table products
+```
+
+This generates a migration that adds the `media_data` JSONB column to the
+specified tables.
 
 ## Tailwind CSS Setup
 
@@ -156,10 +164,7 @@ defmodule MyApp.Post do
 
   schema "posts" do
     field :title, :string
-
-    has_media()          # injects has_many :media (all media for this model)
-    has_media(:images)   # injects has_many :images (scoped to "images" collection)
-    has_media(:avatar)   # injects has_many :avatar (scoped to "avatar" collection)
+    field :media_data, :map, default: %{}   # JSONB column storing all media items
 
     timestamps()
   end
@@ -195,7 +200,8 @@ defmodule MyApp.Post do
 
   schema "posts" do
     field :title, :string
-    has_media()
+    field :media_data, :map, default: %{}
+
     timestamps()
   end
 
@@ -222,7 +228,8 @@ defmodule MyApp.Post do
 
   schema "posts" do
     field :title, :string
-    has_media()
+    field :media_data, :map, default: %{}
+
     timestamps()
   end
 
@@ -244,13 +251,12 @@ defmodule MyApp.Post do
 end
 ```
 
-The `has_media()` macro injects a polymorphic `has_many :media` association so you can use standard Ecto preloading:
+Media data is stored in the `media_data` JSONB column directly on the parent record. Retrieve it with:
 
 ```elixir
-post = Repo.get!(Post, id) |> Repo.preload([:media, :images, :avatar])
+post = Repo.get!(Post, id)
+PhxMediaLibrary.get_media(post)
 ```
-
-Collection-scoped variants like `has_media(:images)` add a scoped `has_many` filtered by both model type and collection name.
 
 ## Add Media
 
@@ -363,13 +369,13 @@ details on custom extractors and supported metadata fields.
 ## Delete Media
 
 ```elixir
-# Delete a single media item (removes files from storage too)
-PhxMediaLibrary.delete(media)
+# Delete a single media item by UUID (removes files from storage too)
+PhxMediaLibrary.delete_media(post, :images, uuid)
 
-# Clear all media in a collection (batch-optimized, single DELETE query)
+# Clear all media in a collection
 {:ok, count} = PhxMediaLibrary.clear_collection(post, :images)
 
-# Clear all media for a model (batch-optimized)
+# Clear all media for a model
 {:ok, count} = PhxMediaLibrary.clear_media(post)
 ```
 

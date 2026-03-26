@@ -1,13 +1,13 @@
 defmodule PhxMediaLibrary.PathGeneratorTest do
   use ExUnit.Case, async: true
 
-  alias PhxMediaLibrary.{Media, PathGenerator}
+  alias PhxMediaLibrary.PathGenerator
 
   describe "for_new_media/1" do
     test "generates path from attributes" do
       attrs = %{
-        mediable_type: "posts",
-        mediable_id: "123e4567-e89b-12d3-a456-426614174000",
+        owner_type: "posts",
+        owner_id: "123e4567-e89b-12d3-a456-426614174000",
         uuid: "abc-123",
         file_name: "test-image.jpg"
       }
@@ -17,10 +17,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
       assert path == "posts/123e4567-e89b-12d3-a456-426614174000/abc-123/test-image.jpg"
     end
 
-    test "handles different mediable types" do
+    test "handles different owner types" do
       attrs = %{
-        mediable_type: "users",
-        mediable_id: "user-456",
+        owner_type: "users",
+        owner_id: "user-456",
         uuid: "file-uuid",
         file_name: "avatar.png"
       }
@@ -32,8 +32,8 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
 
     test "preserves file extension" do
       attrs = %{
-        mediable_type: "products",
-        mediable_id: "prod-1",
+        owner_type: "products",
+        owner_id: "prod-1",
         uuid: "uuid-1",
         file_name: "document.pdf"
       }
@@ -46,10 +46,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
 
   describe "relative_path/2" do
     test "generates path for original file (no conversion)" do
-      media = %Media{
+      media = %{
         uuid: "media-uuid-123",
-        mediable_type: "posts",
-        mediable_id: "post-id-456",
+        owner_type: "posts",
+        owner_id: "post-id-456",
         file_name: "photo.jpg"
       }
 
@@ -59,10 +59,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "generates path for original file with nil conversion" do
-      media = %Media{
+      media = %{
         uuid: "media-uuid-123",
-        mediable_type: "posts",
-        mediable_id: "post-id-456",
+        owner_type: "posts",
+        owner_id: "post-id-456",
         file_name: "photo.jpg"
       }
 
@@ -72,10 +72,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "generates path for conversion as atom" do
-      media = %Media{
+      media = %{
         uuid: "media-uuid-123",
-        mediable_type: "posts",
-        mediable_id: "post-id-456",
+        owner_type: "posts",
+        owner_id: "post-id-456",
         file_name: "photo.jpg"
       }
 
@@ -85,10 +85,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "generates path for conversion as string" do
-      media = %Media{
+      media = %{
         uuid: "media-uuid-123",
-        mediable_type: "posts",
-        mediable_id: "post-id-456",
+        owner_type: "posts",
+        owner_id: "post-id-456",
         file_name: "photo.jpg"
       }
 
@@ -98,10 +98,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "preserves file extension in conversion path" do
-      media = %Media{
+      media = %{
         uuid: "uuid",
-        mediable_type: "docs",
-        mediable_id: "doc-1",
+        owner_type: "docs",
+        owner_id: "doc-1",
         file_name: "image.png"
       }
 
@@ -111,10 +111,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "handles files with multiple dots in name" do
-      media = %Media{
+      media = %{
         uuid: "uuid",
-        mediable_type: "posts",
-        mediable_id: "1",
+        owner_type: "posts",
+        owner_id: "1",
         file_name: "my.photo.file.jpg"
       }
 
@@ -126,10 +126,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
 
     test "handles different file extensions" do
       for ext <- ~w(.jpg .png .gif .webp .pdf .docx) do
-        media = %Media{
+        media = %{
           uuid: "uuid",
-          mediable_type: "files",
-          mediable_id: "1",
+          owner_type: "files",
+          owner_id: "1",
           file_name: "document#{ext}"
         }
 
@@ -143,11 +143,11 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
   end
 
   describe "path structure" do
-    test "uses mediable_type as first directory" do
-      media = %Media{
+    test "uses owner_type as first directory" do
+      media = %{
         uuid: "uuid",
-        mediable_type: "articles",
-        mediable_id: "123",
+        owner_type: "articles",
+        owner_id: "123",
         file_name: "test.jpg"
       }
 
@@ -156,11 +156,11 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
       assert String.starts_with?(path, "articles/")
     end
 
-    test "uses mediable_id as second directory" do
-      media = %Media{
+    test "uses owner_id as second directory" do
+      media = %{
         uuid: "uuid",
-        mediable_type: "posts",
-        mediable_id: "custom-id-here",
+        owner_type: "posts",
+        owner_id: "custom-id-here",
         file_name: "test.jpg"
       }
 
@@ -171,10 +171,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "uses uuid as third directory" do
-      media = %Media{
+      media = %{
         uuid: "unique-file-uuid",
-        mediable_type: "posts",
-        mediable_id: "1",
+        owner_type: "posts",
+        owner_id: "1",
         file_name: "test.jpg"
       }
 
@@ -185,10 +185,10 @@ defmodule PhxMediaLibrary.PathGeneratorTest do
     end
 
     test "filename is last part of path" do
-      media = %Media{
+      media = %{
         uuid: "uuid",
-        mediable_type: "posts",
-        mediable_id: "1",
+        owner_type: "posts",
+        owner_id: "1",
         file_name: "my-file.jpg"
       }
 

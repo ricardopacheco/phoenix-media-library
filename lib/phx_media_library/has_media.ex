@@ -1,18 +1,22 @@
 defmodule PhxMediaLibrary.HasMedia do
   @moduledoc """
-  Adds media association capabilities to an Ecto schema.
+  Adds media management capabilities to an Ecto schema via JSONB.
+
+  Media data is stored in a JSONB column on the schema itself (default:
+  `media_data`), eliminating the need for a separate `media` table.
 
   ## Usage
 
-  There are two styles for defining collections and conversions: the
-  **declarative DSL** (recommended) and the **function-based** approach.
+  1. Add `use PhxMediaLibrary.HasMedia` to your schema
+  2. Declare a `:map` field for the JSONB column
+  3. Define collections and optionally conversions
+
+  ### Options
+
+  - `:column` - JSONB column name (default: `:media_data`)
+  - `:media_type` - Override the type string used in storage paths (default: table name)
 
   ### Declarative DSL — nested style (recommended)
-
-  Nest `convert` calls inside `collection ... do ... end` blocks so it's
-  immediately clear which conversions apply to which collections.
-  Collections without image content (like `:documents`) omit the `do`
-  block — no conversions will run for those uploads.
 
       defmodule MyApp.Post do
         use Ecto.Schema
@@ -20,7 +24,7 @@ defmodule PhxMediaLibrary.HasMedia do
 
         schema "posts" do
           field :title, :string
-          has_media()
+          field :media_data, :map, default: %{}
           timestamps()
         end
 
@@ -28,12 +32,11 @@ defmodule PhxMediaLibrary.HasMedia do
           collection :images, disk: :s3, max_files: 20 do
             convert :thumb, width: 150, height: 150, fit: :cover
             convert :preview, width: 800, quality: 85
-            convert :banner, width: 1200, height: 400, fit: :crop
           end
 
           collection :documents, accepts: ~w(application/pdf)
 
-          collection :avatar, single_file: true, fallback_url: "/images/default.png" do
+          collection :avatar, single_file: true do
             convert :thumb, width: 150, height: 150, fit: :cover
           end
         end
@@ -41,98 +44,43 @@ defmodule PhxMediaLibrary.HasMedia do
 
   ### Declarative DSL — flat style
 
-  Define collections and conversions in separate blocks. Always use the
-  `:collections` option to scope conversions explicitly — without it, a
-  conversion runs for **every** collection (including non-image ones like
-  documents, which will cause processing errors):
+      media_collections do
+        collection :images, disk: :s3, max_files: 20
+        collection :documents, accepts: ~w(application/pdf)
+      end
 
-      defmodule MyApp.Post do
-        use Ecto.Schema
-        use PhxMediaLibrary.HasMedia
-
-        schema "posts" do
-          field :title, :string
-          has_media()
-          timestamps()
-        end
-
-        media_collections do
-          collection :images, disk: :s3, max_files: 20
-          collection :documents, accepts: ~w(application/pdf)
-          collection :avatar, single_file: true, fallback_url: "/images/default.png"
-        end
-
-        media_conversions do
-          convert :thumb, width: 150, height: 150, fit: :cover, collections: [:images, :avatar]
-          convert :preview, width: 800, quality: 85, collections: [:images]
-          convert :banner, width: 1200, height: 400, fit: :crop, collections: [:images]
-        end
+      media_conversions do
+        convert :thumb, width: 150, height: 150, fit: :cover, collections: [:images, :avatar]
+        convert :preview, width: 800, quality: 85, collections: [:images]
       end
 
   ### Function-based approach
 
-      defmodule MyApp.Post do
-        use Ecto.Schema
-        use PhxMediaLibrary.HasMedia
-
-        schema "posts" do
-          field :title, :string
-          has_media()
-          timestamps()
-        end
-
-        def media_collections do
-          [
-            collection(:images, disk: :local),
-            collection(:documents, accepts: ~w(application/pdf)),
-            collection(:avatar, single_file: true)
-          ]
-        end
-
-        def media_conversions do
-          [
-            # Always scope conversions to specific collections
-            conversion(:thumb, width: 150, height: 150, fit: :cover, collections: [:images, :avatar]),
-            conversion(:preview, width: 800, quality: 85, collections: [:images])
-          ]
-        end
+      def media_collections do
+        [
+          collection(:images, disk: :local),
+          collection(:documents, accepts: ~w(application/pdf)),
+          collection(:avatar, single_file: true)
+        ]
       end
 
-  ## How `has_media()` Works
-
-  The `has_media()` macro injects a polymorphic `has_many :media` association
-  into your schema. This enables standard Ecto preloading:
-
-      post = Repo.preload(post, :media)
-      post.media  #=> [%PhxMediaLibrary.Media{}, ...]
-
-  Under the hood, the association uses `mediable_id` as the foreign key and
-  a `:where` clause to scope results by `mediable_type` (derived from the
-  schema's table name).
-
-  You can also define collection-scoped associations:
-
-      schema "posts" do
-        has_media()
-        has_media(:images)
-        has_media(:documents)
+      def media_conversions do
+        [
+          conversion(:thumb, width: 150, height: 150, fit: :cover, collections: [:images, :avatar]),
+          conversion(:preview, width: 800, quality: 85, collections: [:images])
+        ]
       end
 
-  Which enables:
+  ## Generated Functions
 
-      post = Repo.preload(post, [:media, :images, :documents])
-      post.images  #=> only media in the "images" collection
+  `use PhxMediaLibrary.HasMedia` generates:
 
-  ## Overriding the Media Type
-
-  By default the polymorphic `mediable_type` is the Ecto table name (e.g.
-  `"posts"` for `schema "posts"`). You can override it at the module level:
-
-      use PhxMediaLibrary.HasMedia, media_type: "blog_posts"
-
-  Or override the `__media_type__/0` function:
-
-      def __media_type__, do: "blog_posts"
+  - `__media_column__/0` — returns the JSONB column name atom
+  - `__media_type__/0` — returns the type string for storage paths (defaults to table name)
+  - `media_collections/0` — returns the list of collection definitions
+  - `media_conversions/0` — returns the list of conversion definitions
+  - `get_media_collection/1` — looks up a collection by name
+  - `get_media_conversions/1` — returns conversions, optionally filtered by collection
 
   ## Collection Options
 
@@ -163,12 +111,11 @@ defmodule PhxMediaLibrary.HasMedia do
 
   defmacro __using__(opts) do
     media_type_override = Keyword.get(opts, :media_type)
+    column = Keyword.get(opts, :column, :media_data)
 
     quote do
       import PhxMediaLibrary.HasMedia,
         only: [
-          has_media: 0,
-          has_media: 1,
           collection: 1,
           collection: 2,
           conversion: 2,
@@ -183,6 +130,9 @@ defmodule PhxMediaLibrary.HasMedia do
       # Store the explicit override (nil if not provided) so we can
       # resolve it in __before_compile__ and has_media() macro.
       Module.put_attribute(__MODULE__, :__phx_media_type_override__, unquote(media_type_override))
+
+      # Store the JSONB column name for media data storage.
+      Module.put_attribute(__MODULE__, :__phx_media_column__, unquote(column))
 
       # Accumulators for the declarative DSL. When the developer uses
       # `media_collections do ... end` or `media_conversions do ... end`,
@@ -217,6 +167,9 @@ defmodule PhxMediaLibrary.HasMedia do
     override = Module.get_attribute(env.module, :__phx_media_type_override__)
     user_defined_media_type? = Module.defines?(env.module, {:__media_type__, 0}, :def)
 
+    # JSONB column name (default: :media_data)
+    media_column = Module.get_attribute(env.module, :__phx_media_column__) || :media_data
+
     # DSL-collected items (accumulated in reverse order)
     dsl_collections_used? = Module.get_attribute(env.module, :__phx_media_collections_dsl__)
     dsl_conversions_used? = Module.get_attribute(env.module, :__phx_media_conversions_dsl__)
@@ -232,6 +185,7 @@ defmodule PhxMediaLibrary.HasMedia do
       |> Enum.reverse()
 
     media_type_def = build_media_type_def(user_defined_media_type?, override)
+    media_column_def = build_media_column_def(media_column)
     helpers = build_helpers()
 
     dsl_defs =
@@ -244,6 +198,7 @@ defmodule PhxMediaLibrary.HasMedia do
 
     quote do
       unquote(media_type_def)
+      unquote(media_column_def)
       unquote_splicing(dsl_defs)
       unquote(helpers)
     end
@@ -285,6 +240,19 @@ defmodule PhxMediaLibrary.HasMedia do
       def __media_type__ do
         __MODULE__.__schema__(:source)
       end
+    end
+  end
+
+  # Build the __media_column__/0 definition that returns the configured JSONB column name.
+  defp build_media_column_def(column) do
+    quote do
+      @doc """
+      Returns the JSONB column name used to store media data on this schema.
+
+      Defaults to `:media_data`. Can be overridden via
+      `use PhxMediaLibrary.HasMedia, column: :my_column`.
+      """
+      def __media_column__, do: unquote(column)
     end
   end
 
@@ -350,146 +318,6 @@ defmodule PhxMediaLibrary.HasMedia do
   end
 
   defp build_dsl_conversions_def(_, _conversions), do: []
-
-  # -------------------------------------------------------------------------
-  # has_media() macro — injects has_many inside the schema block
-  # -------------------------------------------------------------------------
-
-  @doc """
-  Declares that this schema has media associations.
-
-  When called without arguments (`has_media()`), it injects a polymorphic
-  `has_many :media` association that references all media items for the
-  model regardless of collection.
-
-  When called with a collection name atom (`has_media(:images)`), it injects
-  a collection-scoped `has_many` using that name. For example,
-  `has_media(:images)` creates `has_many :images` scoped to the `"images"`
-  collection.
-
-  This macro **must** be called inside the `schema` block, after the
-  `schema "table_name"` declaration so that the table name is available for
-  the polymorphic `:where` clause.
-
-  ## Examples
-
-      schema "posts" do
-        field :title, :string
-
-        # All media for this model
-        has_media()
-
-        # Collection-scoped associations (optional convenience)
-        has_media(:images)
-        has_media(:documents)
-        has_media(:avatar)
-
-        timestamps()
-      end
-
-  Then you can preload naturally:
-
-      post = Repo.preload(post, [:media, :images, :avatar])
-      post.media     #=> all media items
-      post.images    #=> only items in "images" collection
-      post.avatar    #=> only items in "avatar" collection
-
-  """
-  defmacro has_media(collection_name \\ nil) do
-    # We always delegate to __inject_has_many__/3 which runs at module
-    # compilation time (inside the schema block's try/after). At that
-    # point, both the @__phx_media_type_override__ attribute (set by
-    # `use PhxMediaLibrary.HasMedia`) and the @ecto_struct_fields
-    # attribute (set by Ecto.Schema.__schema__/5) have been evaluated.
-    #
-    # Reading attributes at macro expansion time does NOT work because
-    # Elixir expands all macros before evaluating Module.put_attribute
-    # calls in the module body.
-    if collection_name do
-      collection_str = to_string(collection_name)
-
-      quote do
-        PhxMediaLibrary.HasMedia.__inject_has_many__(
-          __MODULE__,
-          unquote(collection_name),
-          unquote(collection_str)
-        )
-      end
-    else
-      quote do
-        PhxMediaLibrary.HasMedia.__inject_has_many__(
-          __MODULE__,
-          :media,
-          nil
-        )
-      end
-    end
-  end
-
-  @doc false
-  # Called at module compilation time from generated code inside the schema
-  # block. At this point, both the @__phx_media_type_override__ attribute
-  # (from `use PhxMediaLibrary.HasMedia, media_type: "..."`) and the
-  # @ecto_struct_fields attribute (from Ecto.Schema.__schema__/5) have been
-  # evaluated, so we can read them dynamically and pass them to
-  # Ecto.Schema.__has_many__/4.
-  def __inject_has_many__(module, assoc_name, collection_str) do
-    media_type = resolve_media_type(module)
-
-    opts =
-      if collection_str do
-        [
-          foreign_key: :mediable_id,
-          where: [mediable_type: media_type, collection_name: collection_str],
-          defaults: [mediable_type: media_type, collection_name: collection_str]
-        ]
-      else
-        [
-          foreign_key: :mediable_id,
-          where: [mediable_type: media_type],
-          defaults: [mediable_type: media_type]
-        ]
-      end
-
-    Ecto.Schema.__has_many__(module, assoc_name, PhxMediaLibrary.Media, opts)
-  end
-
-  @doc false
-  # Resolves the media type string for a module at compilation time.
-  # Priority: 1) explicit override, 2) Ecto schema source, 3) module name
-  def resolve_media_type(module) do
-    # Priority 1: explicit override from `use PhxMediaLibrary.HasMedia, media_type: "..."`
-    case Module.get_attribute(module, :__phx_media_type_override__) do
-      override when is_binary(override) ->
-        override
-
-      _ ->
-        # Priority 2: Ecto schema source (table name) from @ecto_struct_fields
-        resolve_source_from_ecto_fields(module)
-    end
-  end
-
-  @doc false
-  def resolve_source_from_ecto_fields(module) do
-    case Module.get_attribute(module, :ecto_struct_fields) do
-      fields when is_list(fields) ->
-        Enum.find_value(fields, fn
-          {:__meta__, %{source: source}} when is_binary(source) -> source
-          _ -> nil
-        end) || fallback_module_name(module)
-
-      _ ->
-        fallback_module_name(module)
-    end
-  end
-
-  defp fallback_module_name(module) do
-    # Fallback: underscored module name (without naive pluralization)
-    module
-    |> Module.split()
-    |> List.last()
-    |> Macro.underscore()
-  end
 
   # -------------------------------------------------------------------------
   # Helper functions for building collection/conversion configs

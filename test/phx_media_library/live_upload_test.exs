@@ -302,7 +302,7 @@ defmodule PhxMediaLibrary.LiveUploadTest do
     test "notification messages follow the expected shapes" do
       # Document the contract: these are the message shapes a parent
       # LiveView's handle_info/2 should match on.
-      media_item = %PhxMediaLibrary.Media{id: Ecto.UUID.generate(), file_name: "test.jpg"}
+      media_item = %PhxMediaLibrary.MediaItem{uuid: Ecto.UUID.generate(), file_name: "test.jpg"}
 
       # :media_added — sent after successful consume_media
       assert {:media_added, [^media_item]} = {:media_added, [media_item]}

@@ -3,18 +3,21 @@ defmodule PhxMediaLibrary.PathGenerator do
   Generates storage paths for media files.
 
   The default path structure is:
-  `{mediable_type}/{mediable_id}/{uuid}/{conversion}/{filename}`
+  `{owner_type}/{owner_id}/{uuid}/{filename}`
+
+  Accepts any struct or map with the required fields (`owner_type`,
+  `owner_id`, `uuid`, `file_name`, `disk`).
   """
 
-  alias PhxMediaLibrary.{Config, Media}
+  alias PhxMediaLibrary.Config
 
   @doc """
-  Generate a path for new media (before it has an ID).
+  Generate a path for new media (before it has been persisted).
   """
   def for_new_media(attrs) do
     parts = [
-      attrs.mediable_type,
-      attrs.mediable_id,
+      to_string(attrs.owner_type),
+      to_string(attrs.owner_id),
       attrs.uuid,
       attrs.file_name
     ]
@@ -25,25 +28,25 @@ defmodule PhxMediaLibrary.PathGenerator do
   @doc """
   Generate the relative storage path for a media item.
   """
-  @spec relative_path(Media.t(), atom() | String.t() | nil) :: String.t()
-  def relative_path(%Media{} = media, conversion \\ nil) do
+  @spec relative_path(map(), atom() | String.t() | nil) :: String.t()
+  def relative_path(media, conversion \\ nil) do
     base_path =
       Path.join([
-        media.mediable_type,
-        media.mediable_id,
+        to_string(media.owner_type),
+        to_string(media.owner_id),
         media.uuid
       ])
 
-    filename = conversion_filename(media, conversion)
+    filename = conversion_filename(media.file_name, conversion)
     Path.join(base_path, filename)
   end
 
   @doc """
   Get the full filesystem path (for local storage).
   """
-  @spec full_path(Media.t(), atom() | nil) :: String.t() | nil
-  def full_path(%Media{disk: disk} = media, conversion) do
-    storage = Config.storage_adapter(disk)
+  @spec full_path(map(), atom() | nil) :: String.t() | nil
+  def full_path(media, conversion) do
+    storage = Config.storage_adapter(media.disk)
     relative = relative_path(media, conversion)
 
     # Ensure the adapter module is loaded before checking for the optional
@@ -57,11 +60,11 @@ defmodule PhxMediaLibrary.PathGenerator do
     end
   end
 
-  defp conversion_filename(%Media{file_name: file_name}, nil) do
+  defp conversion_filename(file_name, nil) do
     file_name
   end
 
-  defp conversion_filename(%Media{file_name: file_name}, conversion) do
+  defp conversion_filename(file_name, conversion) do
     ext = Path.extname(file_name)
     base = Path.rootname(file_name)
     "#{base}_#{conversion}#{ext}"

@@ -16,7 +16,7 @@ defmodule PhxMediaLibrary.HasMedia.DSL do
 
         schema "posts" do
           field :title, :string
-          has_media()
+          field :media_data, :map, default: %{}
           timestamps()
         end
 
@@ -45,7 +45,7 @@ defmodule PhxMediaLibrary.HasMedia.DSL do
 
         schema "posts" do
           field :title, :string
-          has_media()
+          field :media_data, :map, default: %{}
           timestamps()
         end
 
@@ -122,8 +122,6 @@ defmodule PhxMediaLibrary.HasMedia.DSL do
       # importing the accumulator macros with the same names.
       import PhxMediaLibrary.HasMedia,
         only: [
-          has_media: 0,
-          has_media: 1,
           conversion: 2,
           convert: 2
         ]
@@ -138,8 +136,6 @@ defmodule PhxMediaLibrary.HasMedia.DSL do
 
       import PhxMediaLibrary.HasMedia,
         only: [
-          has_media: 0,
-          has_media: 1,
           collection: 1,
           collection: 2,
           conversion: 2,
@@ -183,8 +179,6 @@ defmodule PhxMediaLibrary.HasMedia.DSL do
       # importing the accumulator macros with the same names.
       import PhxMediaLibrary.HasMedia,
         only: [
-          has_media: 0,
-          has_media: 1,
           collection: 1,
           collection: 2
         ]
@@ -199,8 +193,6 @@ defmodule PhxMediaLibrary.HasMedia.DSL do
 
       import PhxMediaLibrary.HasMedia,
         only: [
-          has_media: 0,
-          has_media: 1,
           collection: 1,
           collection: 2,
           conversion: 2,

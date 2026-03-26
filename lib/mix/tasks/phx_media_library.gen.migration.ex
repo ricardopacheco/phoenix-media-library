@@ -1,57 +1,62 @@
 defmodule Mix.Tasks.PhxMediaLibrary.Gen.Migration do
   @moduledoc """
-  Generates a new PhxMediaLibrary migration.
-
-  This task is useful for adding new columns or indexes to the media table
-  after the initial installation.
+  Generates a migration that adds a JSONB media column to a table.
 
   ## Usage
 
-      $ mix phx_media_library.gen.migration add_custom_field
+      $ mix phx_media_library.gen.migration posts
+      $ mix phx_media_library.gen.migration posts media_data
+      $ mix phx_media_library.gen.migration users attachments
+
+  ## Arguments
+
+      TABLE_NAME    The target table (required)
+      COLUMN_NAME   The JSONB column name (default: "media_data")
 
   """
 
-  @shortdoc "Generates a new PhxMediaLibrary migration"
+  @shortdoc "Generates a migration to add a JSONB media column"
 
   use Mix.Task
 
   import Mix.Generator
 
+  @default_column "media_data"
+
   @impl Mix.Task
   def run(args) do
     case args do
-      [name | _] ->
-        generate_migration(name)
+      [table | rest] ->
+        column = List.first(rest) || @default_column
+        generate_migration(table, column)
 
       [] ->
-        Mix.shell().error("Usage: mix phx_media_library.gen.migration <name>")
+        Mix.shell().error("Usage: mix phx_media_library.gen.migration <table> [column]")
         exit(:shutdown)
     end
   end
 
-  defp generate_migration(name) do
+  defp generate_migration(table, column) do
     migrations_path = Path.join(["priv", "repo", "migrations"])
     File.mkdir_p!(migrations_path)
 
     timestamp = generate_timestamp()
-    snake_name = Macro.underscore(name)
+    snake_name = "add_#{column}_to_#{table}"
     filename = "#{timestamp}_#{snake_name}.exs"
     path = Path.join(migrations_path, filename)
 
-    module_name = Macro.camelize(name)
+    module_name = "Add#{Macro.camelize(column)}To#{Macro.camelize(table)}"
 
     content = """
     defmodule #{inspect(repo_module())}.Migrations.#{module_name} do
       use Ecto.Migration
 
       def change do
-        alter table(:media) do
-          # Add your changes here
-          # add :new_field, :string
+        alter table(:#{table}) do
+          add :#{column}, :map, default: %{}, null: false
         end
 
-        # Add indexes if needed
-        # create index(:media, [:new_field])
+        create index(:#{table}, [:#{column}], using: "GIN")
       end
     end
     """

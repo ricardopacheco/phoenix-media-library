@@ -1,6 +1,17 @@
 defmodule PhxMediaLibrary.Media do
   @moduledoc """
-  The Media schema represents a file associated with an Ecto model.
+  Utility module for working with media items.
+
+  This is a plain struct (not an Ecto schema) with the same fields as
+  `PhxMediaLibrary.MediaItem`. It provides functions for:
+
+  - `url/2`, `path/2` — URL and filesystem path generation
+  - `srcset/2`, `placeholder/2` — responsive image helpers
+  - `has_conversion?/2` — check if a conversion was generated
+  - `verify_integrity/1` — checksum verification against stored files
+  - `delete_files/1` — remove all files (original + conversions + responsive) from storage
+  - `compute_checksum/2` — compute SHA-256/MD5/SHA-1 checksums
+  - `from_media_item/1`, `to_media_item/1` — convert between `Media` and `MediaItem` structs
 
   ## Fields
 
@@ -14,137 +25,106 @@ defmodule PhxMediaLibrary.Media do
   - `custom_properties` - User-defined metadata
   - `generated_conversions` - Map of conversion names to completion status
   - `responsive_images` - Data for responsive image srcset
-  - `mediable_type` - The type of the associated model (e.g., "posts")
-  - `mediable_id` - The ID of the associated model
-  - `order_column` - For ordering media within a collection
+  - `order` - Position within the collection
   - `checksum` - SHA-256 (or other algorithm) hash of the file contents
   - `checksum_algorithm` - Algorithm used for the checksum (e.g., "sha256")
   - `metadata` - Automatically extracted file metadata (dimensions, duration, EXIF, etc.)
-
+  - `inserted_at` - ISO 8601 timestamp of when the item was added
+  - `owner_type` - The parent schema's table name (virtual, for path generation)
+  - `owner_id` - The parent record's ID (virtual, for path generation)
   """
-
-  use Ecto.Schema
-  import Ecto.Changeset
-  import Ecto.Query
 
   alias PhxMediaLibrary.{
     Config,
+    Helpers,
+    MediaItem,
     PathGenerator,
     ResponsiveImages,
     StorageWrapper,
-    Telemetry,
     UrlGenerator
   }
 
-  @type t :: %__MODULE__{}
+  @type t :: %__MODULE__{
+          uuid: String.t() | nil,
+          collection_name: String.t() | nil,
+          name: String.t() | nil,
+          file_name: String.t() | nil,
+          mime_type: String.t() | nil,
+          disk: String.t() | nil,
+          size: non_neg_integer() | nil,
+          custom_properties: map(),
+          generated_conversions: map(),
+          responsive_images: map(),
+          order: non_neg_integer() | nil,
+          checksum: String.t() | nil,
+          checksum_algorithm: String.t(),
+          metadata: map(),
+          inserted_at: String.t() | nil,
+          owner_type: String.t() | nil,
+          owner_id: String.t() | nil
+        }
 
-  @primary_key {:id, :binary_id, autogenerate: true}
-  @foreign_key_type :binary_id
-  schema "media" do
-    field(:uuid, :string)
-    field(:collection_name, :string, default: "default")
-    field(:name, :string)
-    field(:file_name, :string)
-    field(:mime_type, :string)
-    field(:disk, :string)
-    field(:size, :integer)
-    field(:custom_properties, :map, default: %{})
-    field(:generated_conversions, :map, default: %{})
-    field(:responsive_images, :map, default: %{})
-    field(:order_column, :integer)
-    field(:checksum, :string)
-    field(:checksum_algorithm, :string, default: "sha256")
-    field(:metadata, :map, default: %{})
-    field(:deleted_at, :utc_datetime)
-
-    # Polymorphic association
-    field(:mediable_type, :string)
-    field(:mediable_id, :binary_id)
-
-    timestamps(type: :utc_datetime)
-  end
-
-  @required_fields ~w(uuid collection_name name file_name mime_type disk size mediable_type mediable_id)a
-  @optional_fields ~w(custom_properties generated_conversions responsive_images order_column checksum checksum_algorithm metadata deleted_at)a
-
-  @doc false
-  def changeset(media, attrs) do
-    media
-    |> cast(attrs, @required_fields ++ @optional_fields)
-    |> validate_required(@required_fields)
-    |> unique_constraint(:uuid)
-  end
-
-  @doc """
-  Query media for a given model, optionally filtered by collection.
-
-  By default, soft-deleted records are excluded when soft deletes are
-  enabled. Pass `include_trashed: true` to include them.
-  """
-  @spec for_model(Ecto.Schema.t(), atom() | nil) :: [t()]
-  def for_model(model, collection_name \\ nil) do
-    {mediable_type, mediable_id} = get_mediable_info(model)
-
-    query =
-      from(m in __MODULE__,
-        where: m.mediable_type == ^mediable_type,
-        where: m.mediable_id == ^mediable_id,
-        order_by: [asc: m.order_column, asc: m.inserted_at]
-      )
-
-    query =
-      if collection_name do
-        where(query, [m], m.collection_name == ^to_string(collection_name))
-      else
-        query
-      end
-
-    query = exclude_trashed(query)
-
-    Config.repo().all(query)
-  end
+  defstruct [
+    :uuid,
+    :collection_name,
+    :name,
+    :file_name,
+    :mime_type,
+    :disk,
+    :size,
+    :checksum,
+    :order,
+    :inserted_at,
+    :owner_type,
+    :owner_id,
+    checksum_algorithm: "sha256",
+    custom_properties: %{},
+    generated_conversions: %{},
+    responsive_images: %{},
+    metadata: %{}
+  ]
 
   @doc """
   Get the URL for this media item.
   """
-  @spec url(t(), atom() | nil) :: String.t()
-  def url(%__MODULE__{} = media, conversion \\ nil) do
+  @spec url(t() | MediaItem.t(), atom() | nil) :: String.t()
+  def url(media, conversion \\ nil) do
     UrlGenerator.url(media, conversion)
   end
 
   @doc """
   Get the filesystem path for this media item (local storage only).
   """
-  @spec path(t(), atom() | nil) :: String.t() | nil
-  def path(%__MODULE__{} = media, conversion \\ nil) do
+  @spec path(t() | MediaItem.t(), atom() | nil) :: String.t() | nil
+  def path(media, conversion \\ nil) do
     PathGenerator.full_path(media, conversion)
   end
 
   @doc """
   Get the tiny placeholder data URI for progressive loading.
   """
-  @spec placeholder(t(), atom() | nil) :: String.t() | nil
-  def placeholder(%__MODULE__{} = media, conversion \\ nil) do
+  @spec placeholder(t() | MediaItem.t(), atom() | nil) :: String.t() | nil
+  def placeholder(media, conversion \\ nil) do
     ResponsiveImages.placeholder(media, conversion)
   end
 
   @doc """
   Get the srcset attribute value for responsive images.
   """
-  @spec srcset(t(), atom() | nil) :: String.t() | nil
-  def srcset(%__MODULE__{responsive_images: responsive} = media, conversion \\ nil) do
-    key = conversion_key(conversion)
+  @spec srcset(t() | MediaItem.t(), atom() | nil) :: String.t() | nil
+  def srcset(%{responsive_images: responsive} = media, conversion \\ nil) do
+    key = Helpers.conversion_key(conversion)
 
     case Map.get(responsive, key) do
       nil ->
         nil
 
       %{"variants" => variants} when is_list(variants) ->
-        build_srcset(media, variants, conversion)
+        build_srcset(media, variants)
 
       # Legacy format: list of variants directly
       variants when is_list(variants) ->
-        build_srcset(media, variants, conversion)
+        build_srcset(media, variants)
 
       _ ->
         nil
@@ -152,87 +132,11 @@ defmodule PhxMediaLibrary.Media do
   end
 
   @doc """
-  Check whether a media item has been soft-deleted.
+  Check if a conversion has been generated.
   """
-  @spec trashed?(t()) :: boolean()
-  def trashed?(%__MODULE__{deleted_at: nil}), do: false
-  def trashed?(%__MODULE__{deleted_at: %DateTime{}}), do: true
-
-  @doc """
-  Soft-delete a media item by setting `deleted_at`.
-
-  When soft deletes are enabled globally (`config :phx_media_library,
-  soft_deletes: true`), this is called automatically by `delete/1`
-  instead of permanently removing the record. Files are **not** removed
-  from storage until `permanently_delete/1` is called.
-
-  Returns `{:ok, media}` with the updated record, or `{:error, changeset}`.
-  """
-  @spec soft_delete(t()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
-  def soft_delete(%__MODULE__{} = media) do
-    now = DateTime.utc_now() |> DateTime.truncate(:second)
-
-    media
-    |> Ecto.Changeset.change(deleted_at: now)
-    |> Config.repo().update()
-  end
-
-  @doc """
-  Restore a soft-deleted media item by clearing `deleted_at`.
-
-  Returns `{:ok, media}` with the restored record, or `{:error, changeset}`.
-  """
-  @spec restore(t()) :: {:ok, t()} | {:error, Ecto.Changeset.t()}
-  def restore(%__MODULE__{} = media) do
-    media
-    |> Ecto.Changeset.change(deleted_at: nil)
-    |> Config.repo().update()
-  end
-
-  @doc """
-  Permanently delete a media item and all its files from storage.
-
-  This always performs a hard delete regardless of the soft deletes
-  configuration. Use this for:
-  - Permanently removing soft-deleted items
-  - Force-deleting when soft deletes are enabled
-
-  See also `delete/1` which respects the soft deletes configuration.
-  """
-  @spec permanently_delete(t()) :: :ok | {:error, term()}
-  def permanently_delete(%__MODULE__{} = media) do
-    Telemetry.span([:phx_media_library, :delete], %{media: media, permanent: true}, fn ->
-      # Delete all files (original + conversions)
-      :ok = delete_files(media)
-
-      # Delete database record
-      result =
-        case Config.repo().delete(media) do
-          {:ok, _} -> :ok
-          {:error, _} = error -> error
-        end
-
-      {result, %{media: media, permanent: true}}
-    end)
-  end
-
-  @doc """
-  Delete a media item.
-
-  When soft deletes are enabled (`config :phx_media_library, soft_deletes: true`),
-  this sets the `deleted_at` timestamp instead of removing the record and files.
-  Use `permanently_delete/1` to force a hard delete.
-
-  When soft deletes are disabled (the default), this permanently removes
-  the record and all associated files from storage.
-  """
-  @spec delete(t()) :: :ok | {:ok, t()} | {:error, term()}
-  def delete(%__MODULE__{} = media) do
-    if soft_deletes_enabled?() do
-      soft_delete(media)
-    else
-      permanently_delete(media)
-    end
+  @spec has_conversion?(t() | MediaItem.t(), atom() | String.t()) :: boolean()
+  def has_conversion?(%{generated_conversions: conversions}, name) do
+    Map.get(conversions, to_string(name), false) == true
   end
 
   @doc """
@@ -242,11 +146,12 @@ defmodule PhxMediaLibrary.Media do
   Returns `:ok` if the checksums match, `{:error, :checksum_mismatch}` if
   they don't, or `{:error, :no_checksum}` if no checksum was stored.
   """
-  @spec verify_integrity(t()) :: :ok | {:error, :checksum_mismatch | :no_checksum | term()}
-  def verify_integrity(%__MODULE__{checksum: nil}), do: {:error, :no_checksum}
-  def verify_integrity(%__MODULE__{checksum_algorithm: nil}), do: {:error, :no_checksum}
+  @spec verify_integrity(t() | MediaItem.t()) ::
+          :ok | {:error, :checksum_mismatch | :no_checksum | term()}
+  def verify_integrity(%{checksum: nil}), do: {:error, :no_checksum}
+  def verify_integrity(%{checksum_algorithm: nil}), do: {:error, :no_checksum}
 
-  def verify_integrity(%__MODULE__{} = media) do
+  def verify_integrity(media) do
     storage = Config.storage_adapter(media.disk)
     relative = PathGenerator.relative_path(media, nil)
 
@@ -281,76 +186,13 @@ defmodule PhxMediaLibrary.Media do
   end
 
   @doc """
-  Check if a conversion has been generated.
+  Delete all files associated with a media item from storage.
+
+  Removes the original file, all generated conversions, and all
+  responsive image variants.
   """
-  @spec has_conversion?(t(), atom()) :: boolean()
-  def has_conversion?(%__MODULE__{generated_conversions: conversions}, name) do
-    Map.get(conversions, to_string(name), false)
-  end
-
-  @doc """
-  Returns whether soft deletes are enabled globally.
-  """
-  @spec soft_deletes_enabled?() :: boolean()
-  def soft_deletes_enabled? do
-    Application.get_env(:phx_media_library, :soft_deletes, false)
-  end
-
-  @doc """
-  Adds a `WHERE deleted_at IS NULL` clause to the query when soft deletes
-  are enabled. Returns the query unchanged otherwise.
-  """
-  @spec exclude_trashed(Ecto.Query.t()) :: Ecto.Query.t()
-  def exclude_trashed(query) do
-    if soft_deletes_enabled?() do
-      where(query, [m], is_nil(m.deleted_at))
-    else
-      query
-    end
-  end
-
-  @doc """
-  Adds a `WHERE deleted_at IS NOT NULL` clause to only return trashed items.
-  """
-  @spec only_trashed(Ecto.Query.t()) :: Ecto.Query.t()
-  def only_trashed(query) do
-    where(query, [m], not is_nil(m.deleted_at))
-  end
-
-  # Private functions
-
-  defp get_mediable_info(model) do
-    type =
-      if function_exported?(model.__struct__, :__media_type__, 0) do
-        model.__struct__.__media_type__()
-      else
-        # Fallback for schemas that don't `use PhxMediaLibrary.HasMedia`:
-        # derive from Ecto table name if available, otherwise fall back to
-        # underscored module name (without naive pluralization).
-        if function_exported?(model.__struct__, :__schema__, 1) do
-          model.__struct__.__schema__(:source)
-        else
-          model.__struct__
-          |> Module.split()
-          |> List.last()
-          |> Macro.underscore()
-        end
-      end
-
-    {type, model.id}
-  end
-
-  defp conversion_key(nil), do: "original"
-  defp conversion_key(conversion), do: to_string(conversion)
-
-  defp build_srcset(media, sizes, _conversion) do
-    Enum.map_join(sizes, ", ", fn %{"width" => width, "path" => path} ->
-      url = UrlGenerator.url_for_path(media, path)
-      "#{url} #{width}w"
-    end)
-  end
-
-  defp delete_files(%__MODULE__{disk: disk} = media) do
+  @spec delete_files(t() | MediaItem.t()) :: :ok
+  def delete_files(%{disk: disk} = media) do
     storage = Config.storage_adapter(disk)
 
     # Delete original
@@ -369,10 +211,36 @@ defmodule PhxMediaLibrary.Media do
     media.responsive_images
     |> Map.values()
     |> List.flatten()
-    |> Enum.each(fn %{"path" => path} ->
-      StorageWrapper.delete(storage, path)
+    |> Enum.each(fn
+      %{"path" => path} -> StorageWrapper.delete(storage, path)
+      _ -> :ok
     end)
 
     :ok
+  end
+
+  @doc """
+  Convert a `MediaItem` to a `Media` struct.
+  """
+  @spec from_media_item(MediaItem.t()) :: t()
+  def from_media_item(%MediaItem{} = item) do
+    struct(__MODULE__, Map.from_struct(item))
+  end
+
+  @doc """
+  Convert a `Media` struct to a `MediaItem`.
+  """
+  @spec to_media_item(t()) :: MediaItem.t()
+  def to_media_item(%__MODULE__{} = media) do
+    struct(MediaItem, Map.from_struct(media))
+  end
+
+  # Private helpers
+
+  defp build_srcset(media, sizes) do
+    Enum.map_join(sizes, ", ", fn %{"width" => width, "path" => path} ->
+      url = UrlGenerator.url_for_path(media, path)
+      "#{url} #{width}w"
+    end)
   end
 end

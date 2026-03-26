@@ -1,24 +1,24 @@
 defmodule PhxMediaLibrary.AsyncProcessor do
   @moduledoc """
-  Behaviour for async processing adapters.
+  Behaviour for asynchronous conversion processing.
 
-  The default implementation uses `Task.Supervisor` for simple async processing.
-  For production apps with persistence and retry requirements, use the Oban adapter.
+  The context map contains:
+  - `:owner_module` - The Ecto schema module
+  - `:owner_id` - The parent record ID
+  - `:collection_name` - Collection name string
+  - `:item_uuid` - Media item UUID
   """
 
-  alias PhxMediaLibrary.{Conversion, Media}
+  @type context :: %{
+          owner_module: module(),
+          owner_id: String.t(),
+          collection_name: String.t(),
+          item_uuid: String.t()
+        }
 
-  @doc """
-  Process conversions asynchronously.
-  """
-  @callback process_async(media :: Media.t(), conversions :: [Conversion.t()]) ::
-              :ok | {:error, term()}
+  @callback process_async(context(), [PhxMediaLibrary.Conversion.t()]) :: :ok | {:error, term()}
 
-  @doc """
-  Process conversions synchronously (for testing or immediate needs).
-  """
-  @callback process_sync(media :: Media.t(), conversions :: [Conversion.t()]) ::
-              :ok | {:error, term()}
+  @callback process_sync(context(), [PhxMediaLibrary.Conversion.t()]) :: :ok | {:error, term()}
 
   @optional_callbacks [process_sync: 2]
 end

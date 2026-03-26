@@ -4,7 +4,7 @@ This guide covers reordering, mix tasks, and testing strategies.
 
 ## Reordering Media
 
-Media items within a collection have an `order_column` that controls their
+Media items within a collection have an `order` that controls their
 display order. PhxMediaLibrary provides two functions for managing order.
 
 ### Reorder by ID List
@@ -23,11 +23,12 @@ explicitly ordered items.
 
 ### Move a Single Item
 
-Move one media item to a specific 1-based position within its collection:
+Move one media item to a specific 1-based position within its collection by
+specifying the parent model, collection name, and item UUID:
 
 ```elixir
-{:ok, updated_media} = PhxMediaLibrary.move_to(media, 1)   # move to first
-{:ok, updated_media} = PhxMediaLibrary.move_to(media, 3)   # move to third
+{:ok, updated_model} = PhxMediaLibrary.move_to(post, :images, uuid, 1)   # move to first
+{:ok, updated_model} = PhxMediaLibrary.move_to(post, :images, uuid, 3)   # move to third
 ```
 
 The position is clamped to the valid range — passing a position larger than the
@@ -52,28 +53,28 @@ end
 ## Deleting Media
 
 ```elixir
-# Delete a single media item (removes files from storage too)
-PhxMediaLibrary.delete(media)
+# Delete a single media item by UUID (removes files from storage too)
+PhxMediaLibrary.delete_media(post, :images, uuid)
 
-# Clear all media in a collection (batch-optimized, single DELETE query)
+# Clear all media in a collection
 {:ok, count} = PhxMediaLibrary.clear_collection(post, :images)
 
-# Clear all media for a model (batch-optimized)
+# Clear all media for a model
 {:ok, count} = PhxMediaLibrary.clear_media(post)
 ```
 
 Both `clear_collection/2` and `clear_media/1` delete files from storage for
-each item, then remove all matching database records in a single `DELETE` query
-(avoiding N+1).
+each item, then update the parent record's `media_data` JSONB column
+accordingly.
 
 ## Mix Tasks
 
 ### Install
 
-Generate the `media` table migration with all required fields:
+Generate a migration that adds the `media_data` JSONB column to your tables:
 
 ```bash
-mix phx_media_library.install
+mix phx_media_library.install --table posts --table products
 ```
 
 ### Regenerate Conversions
@@ -167,13 +168,13 @@ children = [
 ### How It Works
 
 When media is uploaded and conversions are defined, PhxMediaLibrary enqueues an
-Oban job with the media ID, conversion names, and the `mediable_type`. The
-`PhxMediaLibrary.Workers.ProcessConversions` worker then:
+Oban job with the owner module, owner ID, collection name, item UUID, and
+conversion names. The `PhxMediaLibrary.Workers.ProcessConversions` worker then:
 
-1. Looks up the media record from the database
-2. Discovers the originating Ecto schema module from the `mediable_type`
+1. Looks up the parent record using the `owner_type` and `owner_id`
+2. Locates the media item in the JSONB data by collection name and UUID
 3. Retrieves the full `Conversion` definitions (width, height, quality, fit, etc.)
-4. Processes each conversion and updates the media record
+4. Processes each conversion and updates the parent record's `media_data`
 
 ### Retry Behaviour
 

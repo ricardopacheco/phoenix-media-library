@@ -40,7 +40,7 @@ defmodule PhxMediaLibrary.ResponsiveImages do
 
   """
 
-  alias PhxMediaLibrary.{Config, Media, PathGenerator, UrlGenerator}
+  alias PhxMediaLibrary.{Config, Helpers, Media, MediaItem, PathGenerator, UrlGenerator}
 
   @type responsive_data :: %{
           String.t() => [
@@ -57,8 +57,9 @@ defmodule PhxMediaLibrary.ResponsiveImages do
 
   Returns updated responsive_images data to be stored on the media record.
   """
-  @spec generate(Media.t(), atom() | nil) :: {:ok, responsive_data()} | {:error, term()}
-  def generate(%Media{} = media, conversion \\ nil) do
+  @spec generate(Media.t() | MediaItem.t(), atom() | nil) ::
+          {:ok, responsive_data()} | {:error, term()}
+  def generate(%{disk: _, file_name: _, uuid: _} = media, conversion \\ nil) do
     processor = Config.image_processor()
     storage = Config.storage_adapter(media.disk)
     source_path = get_source_path(media, conversion)
@@ -86,8 +87,8 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   @doc """
   Generate responsive variants for all conversions of a media item.
   """
-  @spec generate_all(Media.t()) :: {:ok, responsive_data()} | {:error, term()}
-  def generate_all(%Media{} = media) do
+  @spec generate_all(Media.t() | MediaItem.t()) :: {:ok, responsive_data()} | {:error, term()}
+  def generate_all(%{disk: _, file_name: _, uuid: _} = media) do
     with {:ok, original_data} <- generate(media, nil) do
       conversion_data = generate_conversion_data(media)
       {:ok, Map.merge(original_data, conversion_data)}
@@ -97,9 +98,9 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   @doc """
   Build a srcset string from responsive image data.
   """
-  @spec build_srcset(Media.t(), atom() | nil) :: String.t() | nil
-  def build_srcset(%Media{responsive_images: responsive} = media, conversion \\ nil) do
-    key = conversion_key(conversion)
+  @spec build_srcset(Media.t() | MediaItem.t(), atom() | nil) :: String.t() | nil
+  def build_srcset(%{responsive_images: responsive} = media, conversion \\ nil) do
+    key = Helpers.conversion_key(conversion)
 
     case get_in(responsive, [key, "variants"]) do
       nil ->
@@ -129,18 +130,19 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   @doc """
   Get the tiny placeholder data URI for progressive loading.
   """
-  @spec placeholder(Media.t(), atom() | nil) :: String.t() | nil
-  def placeholder(%Media{responsive_images: responsive}, conversion \\ nil) do
-    key = conversion_key(conversion)
+  @spec placeholder(Media.t() | MediaItem.t(), atom() | nil) :: String.t() | nil
+  def placeholder(%{responsive_images: responsive}, conversion \\ nil) do
+    key = Helpers.conversion_key(conversion)
     get_in(responsive, [key, "placeholder", "data_uri"])
   end
 
   @doc """
   Get placeholder dimensions for proper aspect ratio.
   """
-  @spec placeholder_dimensions(Media.t(), atom() | nil) :: {integer(), integer()} | nil
-  def placeholder_dimensions(%Media{responsive_images: responsive}, conversion \\ nil) do
-    key = conversion_key(conversion)
+  @spec placeholder_dimensions(Media.t() | MediaItem.t(), atom() | nil) ::
+          {integer(), integer()} | nil
+  def placeholder_dimensions(%{responsive_images: responsive}, conversion \\ nil) do
+    key = Helpers.conversion_key(conversion)
 
     case get_in(responsive, [key, "placeholder"]) do
       %{"width" => w, "height" => h} -> {w, h}
@@ -201,8 +203,8 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   defp responsive_variant_path(media, conversion, width) do
     base_path =
       Path.join([
-        media.mediable_type,
-        media.mediable_id,
+        to_string(media.owner_type),
+        to_string(media.owner_id),
         media.uuid,
         "responsive"
       ])
@@ -256,7 +258,7 @@ defmodule PhxMediaLibrary.ResponsiveImages do
 
     all_variants = variants ++ [original_variant]
     placeholder = maybe_generate_placeholder(image, processor)
-    key = conversion_key(conversion)
+    key = Helpers.conversion_key(conversion)
 
     %{
       key => %{
@@ -296,9 +298,6 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   defp get_source_path(media, conversion) do
     PathGenerator.full_path(media, conversion)
   end
-
-  defp conversion_key(nil), do: "original"
-  defp conversion_key(conversion), do: to_string(conversion)
 
   defp temp_file_path(path) do
     dir = System.tmp_dir!()

@@ -1,44 +1,36 @@
 defmodule Mix.Tasks.PhxMediaLibrary.Regenerate do
   @moduledoc """
-  Regenerates media conversions.
+  Regenerates media conversions from JSONB data on parent schemas.
 
-  This task is useful when you've changed conversion definitions
-  and need to regenerate all derived images.
+  This task loads records from a specified schema, extracts media items from
+  the JSONB column, and re-runs conversion processing for each item.
 
   ## Usage
 
-      # Regenerate all conversions for all media
-      $ mix phx_media_library.regenerate
+      # Regenerate all conversions for a model
+      $ mix phx_media_library.regenerate --model MyApp.Post
 
-      # Regenerate specific conversion
-      $ mix phx_media_library.regenerate --conversion thumb
+      # Regenerate a specific conversion
+      $ mix phx_media_library.regenerate --model MyApp.Post --conversion thumb
 
-      # Regenerate for specific collection
-      $ mix phx_media_library.regenerate --collection images
+      # Regenerate for a specific collection only
+      $ mix phx_media_library.regenerate --model MyApp.Post --collection images
 
-      # Regenerate for specific model type
-      $ mix phx_media_library.regenerate --model posts
-
-      # Dry run (show what would be regenerated)
-      $ mix phx_media_library.regenerate --dry-run
+      # Dry run
+      $ mix phx_media_library.regenerate --model MyApp.Post --dry-run
 
   ## Options
 
+      --model         Schema module to process (required)
       --conversion    Only regenerate this conversion (can be repeated)
       --collection    Only regenerate for this collection
-      --model         Only regenerate for this model type (e.g., "posts")
       --dry-run       Show what would be regenerated without doing it
-      --batch-size    Number of items to process at once (default: 100)
 
   """
 
   @shortdoc "Regenerates media conversions"
 
   use Mix.Task
-
-  import Ecto.Query
-
-  @default_batch_size 100
 
   @impl Mix.Task
   def run(args) do
@@ -48,19 +40,27 @@ defmodule Mix.Tasks.PhxMediaLibrary.Regenerate do
           conversion: [:string, :keep],
           collection: :string,
           model: :string,
-          dry_run: :boolean,
-          batch_size: :integer
+          dry_run: :boolean
         ]
       )
 
-    # Start the application
+    unless opts[:model] do
+      Mix.shell().error("Missing required --model option.")
+      Mix.shell().error("Usage: mix phx_media_library.regenerate --model MyApp.Post")
+      exit(:shutdown)
+    end
+
     Mix.Task.run("app.start")
 
-    conversions = Keyword.get_values(opts, :conversion)
-    collection = opts[:collection]
-    model = opts[:model]
+    model_module = Module.concat([opts[:model]])
+    filter_conversions = Keyword.get_values(opts, :conversion)
+    collection_filter = opts[:collection]
     dry_run? = opts[:dry_run] || false
-    batch_size = opts[:batch_size] || @default_batch_size
+
+    unless function_exported?(model_module, :__media_column__, 0) do
+      Mix.shell().error("#{inspect(model_module)} does not export __media_column__/0")
+      exit(:shutdown)
+    end
 
     Mix.shell().info("""
 
@@ -73,64 +73,89 @@ defmodule Mix.Tasks.PhxMediaLibrary.Regenerate do
     end
 
     repo = PhxMediaLibrary.Config.repo()
-    query = build_query(collection, model)
+    column = model_module.__media_column__()
+    owner_type = PhxMediaLibrary.Helpers.owner_type_for_module(model_module)
+    records = repo.all(model_module)
 
-    total = repo.aggregate(query, :count)
-    Mix.shell().info("Found #{total} media items to process\n")
+    items = collect_items(records, column, owner_type, collection_filter)
+    total = length(items)
+
+    Mix.shell().info("Found #{total} media item(s) to process\n")
 
     if total == 0 do
       Mix.shell().info("#{IO.ANSI.green()}Nothing to regenerate.#{IO.ANSI.reset()}")
     else
-      process_media(repo, query, conversions, dry_run?, batch_size, total)
-    end
-  end
-
-  defp build_query(collection, model) do
-    query = from(m in PhxMediaLibrary.Media, order_by: [asc: m.inserted_at])
-
-    query =
-      if collection do
-        where(query, [m], m.collection_name == ^collection)
-      else
-        query
-      end
-
-    if model do
-      where(query, [m], m.mediable_type == ^model)
-    else
-      query
-    end
-  end
-
-  defp process_media(repo, query, conversions, dry_run?, batch_size, total) do
-    processor = PhxMediaLibrary.Config.image_processor()
-
-    query
-    |> repo.stream(max_rows: batch_size)
-    |> repo.transaction(fn stream ->
-      stream
-      |> Stream.with_index(1)
-      |> Enum.each(fn {media, index} ->
-        process_single(media, conversions, dry_run?, processor, index, total)
+      items
+      |> Enum.with_index(1)
+      |> Enum.each(fn {item, index} ->
+        process_item(item, model_module, filter_conversions, dry_run?, index, total)
       end)
-    end)
 
-    Mix.shell().info("\n#{IO.ANSI.green()}✓ Regeneration complete!#{IO.ANSI.reset()}")
+      Mix.shell().info("\n#{IO.ANSI.green()}Regeneration complete!#{IO.ANSI.reset()}")
+    end
   end
 
-  defp process_single(media, filter_conversions, dry_run?, _processor, index, total) do
-    progress = "#{String.pad_leading("#{index}", String.length("#{total}"))} / #{total}"
-    conversions = conversions_for_media(media, filter_conversions)
+  defp collect_items(records, column, owner_type, collection_filter) do
+    Enum.flat_map(records, fn record ->
+      data = Map.get(record, column) || %{}
+      owner_id = to_string(record.id)
+
+      if collection_filter do
+        PhxMediaLibrary.MediaData.get_collection(data, collection_filter,
+          owner_type: owner_type,
+          owner_id: owner_id
+        )
+      else
+        PhxMediaLibrary.MediaData.all_items(data,
+          owner_type: owner_type,
+          owner_id: owner_id
+        )
+      end
+    end)
+  end
+
+  defp process_item(item, model_module, filter_conversions, dry_run?, index, total) do
+    progress = "#{String.pad_leading("#{index}", String.length("#{total}"))}/#{total}"
+    collection_name = item.collection_name
+
+    conversions = get_conversions(model_module, collection_name, filter_conversions)
 
     if conversions == [] do
-      Mix.shell().info("[#{progress}] #{media.file_name} - no conversions to process")
+      Mix.shell().info("[#{progress}] #{item.file_name} - no conversions to process")
     else
-      run_or_report(media, conversions, dry_run?, progress)
+      conversion_names = Enum.map_join(conversions, ", ", &to_string(&1.name))
+
+      if dry_run? do
+        Mix.shell().info(
+          "[#{progress}] #{item.file_name} - would regenerate: #{conversion_names}"
+        )
+      else
+        Mix.shell().info("[#{progress}] #{item.file_name} - regenerating: #{conversion_names}")
+
+        context = %{
+          owner_module: model_module,
+          owner_id: item.owner_id,
+          collection_name: collection_name,
+          item_uuid: item.uuid
+        }
+
+        case PhxMediaLibrary.Conversions.process(context, conversions) do
+          :ok ->
+            :ok
+
+          {:error, reason} ->
+            Mix.shell().error("  #{IO.ANSI.red()}Error: #{inspect(reason)}#{IO.ANSI.reset()}")
+        end
+      end
     end
   end
 
-  defp conversions_for_media(media, filter_conversions) do
-    conversions = get_conversions_for_media(media)
+  defp get_conversions(model_module, collection_name, filter_conversions) do
+    collection_atom =
+      if is_binary(collection_name), do: String.to_atom(collection_name), else: collection_name
+
+    conversions =
+      PhxMediaLibrary.ModelRegistry.get_model_conversions(model_module, collection_atom)
 
     if filter_conversions != [] do
       Enum.filter(conversions, &(to_string(&1.name) in filter_conversions))
@@ -139,49 +164,4 @@ defmodule Mix.Tasks.PhxMediaLibrary.Regenerate do
     end
   end
 
-  defp run_or_report(media, conversions, dry_run?, progress) do
-    conversion_names = Enum.map_join(conversions, ", ", &to_string(&1.name))
-
-    if dry_run? do
-      Mix.shell().info("[#{progress}] #{media.file_name} - would regenerate: #{conversion_names}")
-    else
-      do_regenerate(media, conversions, conversion_names, progress)
-    end
-  end
-
-  defp do_regenerate(media, conversions, conversion_names, progress) do
-    Mix.shell().info("[#{progress}] #{media.file_name} - regenerating: #{conversion_names}")
-
-    case PhxMediaLibrary.Conversions.process(media, conversions) do
-      :ok ->
-        :ok
-
-      {:error, reason} ->
-        Mix.shell().error("  #{IO.ANSI.red()}Error: #{inspect(reason)}#{IO.ANSI.reset()}")
-    end
-  end
-
-  defp get_conversions_for_media(media) do
-    media.mediable_type
-    |> get_model_module()
-    |> get_conversions_from_module(media.collection_name)
-  end
-
-  defp get_conversions_from_module(nil, _collection_name), do: []
-
-  defp get_conversions_from_module(module, collection_name) when is_atom(module) do
-    if function_exported?(module, :get_media_conversions, 1) do
-      module.get_media_conversions(String.to_atom(collection_name))
-    else
-      []
-    end
-  end
-
-  @spec get_model_module(String.t()) :: module() | nil
-  defp get_model_module(mediable_type) do
-    case PhxMediaLibrary.ModelRegistry.find_model_module(mediable_type) do
-      {:ok, module} -> module
-      :error -> nil
-    end
-  end
 end

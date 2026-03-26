@@ -3,132 +3,6 @@ defmodule PhxMediaLibrary.MediaTest do
 
   alias PhxMediaLibrary.Media
 
-  describe "changeset/2" do
-    test "valid attributes create a valid changeset" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "images",
-        name: "test-image",
-        file_name: "test-image.jpg",
-        mime_type: "image/jpeg",
-        disk: "local",
-        size: 1024,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
-      }
-
-      changeset = Media.changeset(%Media{}, attrs)
-      assert changeset.valid?
-    end
-
-    test "requires all mandatory fields" do
-      changeset = Media.changeset(%Media{}, %{})
-      refute changeset.valid?
-
-      errors = errors_on(changeset)
-      assert "can't be blank" in errors.uuid
-      # collection_name has a default value so it won't be in errors
-      assert "can't be blank" in errors.name
-      assert "can't be blank" in errors.file_name
-      assert "can't be blank" in errors.mime_type
-      assert "can't be blank" in errors.disk
-      assert "can't be blank" in errors.size
-      assert "can't be blank" in errors.mediable_type
-      assert "can't be blank" in errors.mediable_id
-    end
-
-    test "sets default values" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "default",
-        name: "test",
-        file_name: "test.jpg",
-        mime_type: "image/jpeg",
-        disk: "local",
-        size: 100,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
-      }
-
-      changeset = Media.changeset(%Media{}, attrs)
-      assert changeset.valid?
-
-      media = Ecto.Changeset.apply_changes(changeset)
-      assert media.custom_properties == %{}
-      assert media.generated_conversions == %{}
-      assert media.responsive_images == %{}
-    end
-
-    test "accepts optional fields" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "images",
-        name: "test",
-        file_name: "test.jpg",
-        mime_type: "image/jpeg",
-        disk: "local",
-        size: 100,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate(),
-        custom_properties: %{"alt" => "Test image"},
-        order_column: 5
-      }
-
-      changeset = Media.changeset(%Media{}, attrs)
-      assert changeset.valid?
-
-      media = Ecto.Changeset.apply_changes(changeset)
-      assert media.custom_properties == %{"alt" => "Test image"}
-      assert media.order_column == 5
-    end
-
-    test "accepts generated_conversions map" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "images",
-        name: "test",
-        file_name: "test.jpg",
-        mime_type: "image/jpeg",
-        disk: "local",
-        size: 100,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate(),
-        generated_conversions: %{"thumb" => true, "preview" => true}
-      }
-
-      changeset = Media.changeset(%Media{}, attrs)
-      assert changeset.valid?
-
-      media = Ecto.Changeset.apply_changes(changeset)
-      assert media.generated_conversions == %{"thumb" => true, "preview" => true}
-    end
-
-    test "accepts responsive_images map" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "images",
-        name: "test",
-        file_name: "test.jpg",
-        mime_type: "image/jpeg",
-        disk: "local",
-        size: 100,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate(),
-        responsive_images: %{
-          "original" => [
-            %{"width" => 320, "path" => "images/uuid/responsive/test-320.jpg"}
-          ]
-        }
-      }
-
-      changeset = Media.changeset(%Media{}, attrs)
-      assert changeset.valid?
-
-      media = Ecto.Changeset.apply_changes(changeset)
-      assert Map.has_key?(media.responsive_images, "original")
-    end
-  end
-
   describe "has_conversion?/2" do
     test "returns true when conversion exists" do
       media = %Media{generated_conversions: %{"thumb" => true, "preview" => true}}
@@ -168,8 +42,8 @@ defmodule PhxMediaLibrary.MediaTest do
         file_name: "test-image.jpg",
         mime_type: "image/jpeg",
         size: 1024,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       url = Media.url(media)
@@ -187,8 +61,8 @@ defmodule PhxMediaLibrary.MediaTest do
         mime_type: "image/jpeg",
         size: 1024,
         generated_conversions: %{"thumb" => true},
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       url = Media.url(media, :thumb)
@@ -203,8 +77,8 @@ defmodule PhxMediaLibrary.MediaTest do
         uuid: "test-uuid",
         disk: "memory",
         responsive_images: %{},
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       assert Media.srcset(media) == nil
@@ -217,8 +91,8 @@ defmodule PhxMediaLibrary.MediaTest do
         responsive_images: %{
           "original" => [%{"width" => 320, "path" => "path/320.jpg"}]
         },
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       assert Media.srcset(media, :thumb) == nil
@@ -237,8 +111,8 @@ defmodule PhxMediaLibrary.MediaTest do
             %{"width" => 640, "path" => "images/uuid/responsive/test-640.jpg"}
           ]
         },
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       srcset = Media.srcset(media)
@@ -260,8 +134,8 @@ defmodule PhxMediaLibrary.MediaTest do
             %{"width" => 300, "path" => "images/uuid/responsive/thumb-300.jpg"}
           ]
         },
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       srcset = Media.srcset(media, :thumb)
@@ -275,7 +149,6 @@ defmodule PhxMediaLibrary.MediaTest do
     test "has correct struct keys" do
       media = %Media{}
 
-      assert Map.has_key?(media, :id)
       assert Map.has_key?(media, :uuid)
       assert Map.has_key?(media, :collection_name)
       assert Map.has_key?(media, :name)
@@ -286,27 +159,149 @@ defmodule PhxMediaLibrary.MediaTest do
       assert Map.has_key?(media, :custom_properties)
       assert Map.has_key?(media, :generated_conversions)
       assert Map.has_key?(media, :responsive_images)
-      assert Map.has_key?(media, :order_column)
-      assert Map.has_key?(media, :mediable_type)
-      assert Map.has_key?(media, :mediable_id)
+      assert Map.has_key?(media, :order)
+      assert Map.has_key?(media, :owner_type)
+      assert Map.has_key?(media, :owner_id)
+      assert Map.has_key?(media, :checksum)
+      assert Map.has_key?(media, :checksum_algorithm)
+      assert Map.has_key?(media, :metadata)
+      assert Map.has_key?(media, :inserted_at)
     end
 
     test "has default values" do
       media = %Media{}
 
-      assert media.collection_name == "default"
       assert media.custom_properties == %{}
       assert media.generated_conversions == %{}
       assert media.responsive_images == %{}
+      assert media.metadata == %{}
+      assert media.checksum_algorithm == "sha256"
     end
   end
 
-  # Helper to extract errors from changeset
-  defp errors_on(changeset) do
-    Ecto.Changeset.traverse_errors(changeset, fn {message, opts} ->
-      Regex.replace(~r"%{(\w+)}", message, fn _, key ->
-        opts |> Keyword.get(String.to_existing_atom(key), key) |> to_string()
-      end)
-    end)
+  describe "compute_checksum/2" do
+    test "computes SHA-256 checksum by default" do
+      content = "hello world"
+      checksum = Media.compute_checksum(content)
+
+      # known SHA-256 of "hello world"
+      expected = "b94d27b9934d3e08a52e52d7da7dabfac484efe37a5380ee9088f7ace2efcde9"
+      assert checksum == expected
+    end
+
+    test "computes SHA-256 checksum explicitly" do
+      content = "test content"
+      checksum = Media.compute_checksum(content, "sha256")
+
+      assert is_binary(checksum)
+      assert String.length(checksum) == 64
+      assert String.match?(checksum, ~r/^[0-9a-f]+$/)
+    end
+
+    test "computes MD5 checksum" do
+      content = "hello world"
+      checksum = Media.compute_checksum(content, "md5")
+
+      # known MD5 of "hello world"
+      expected = "5eb63bbbe01eeed093cb22bb8f5acdc3"
+      assert checksum == expected
+    end
+
+    test "computes SHA-1 checksum" do
+      content = "hello world"
+      checksum = Media.compute_checksum(content, "sha1")
+
+      # known SHA-1 of "hello world"
+      expected = "2aae6c35c94fcfb415dbe95f408b9ce91ee846ed"
+      assert checksum == expected
+    end
+
+    test "raises for unsupported algorithm" do
+      assert_raise RuntimeError, ~r/Unsupported checksum algorithm/, fn ->
+        Media.compute_checksum("data", "sha512")
+      end
+    end
+
+    test "different content produces different checksums" do
+      checksum_a = Media.compute_checksum("content A")
+      checksum_b = Media.compute_checksum("content B")
+
+      refute checksum_a == checksum_b
+    end
+
+    test "same content always produces the same checksum" do
+      content = "reproducible"
+      checksum_1 = Media.compute_checksum(content)
+      checksum_2 = Media.compute_checksum(content)
+
+      assert checksum_1 == checksum_2
+    end
+
+    test "handles empty binary" do
+      checksum = Media.compute_checksum("")
+      assert is_binary(checksum)
+      assert String.length(checksum) == 64
+    end
+
+    test "handles large binary" do
+      content = :crypto.strong_rand_bytes(1_000_000)
+      checksum = Media.compute_checksum(content)
+
+      assert is_binary(checksum)
+      assert String.length(checksum) == 64
+    end
+  end
+
+  describe "verify_integrity/1" do
+    test "returns error when no checksum is stored" do
+      media = %Media{checksum: nil, checksum_algorithm: "sha256"}
+      assert {:error, :no_checksum} = Media.verify_integrity(media)
+    end
+
+    test "returns error when no algorithm is stored" do
+      media = %Media{checksum: "abc", checksum_algorithm: nil}
+      assert {:error, :no_checksum} = Media.verify_integrity(media)
+    end
+  end
+
+  describe "delete_files/1" do
+    test "accepts a Media struct" do
+      # Basic smoke test - just ensure it doesn't crash with a valid struct
+      media = %Media{
+        uuid: "test-uuid",
+        disk: "memory",
+        owner_type: "posts",
+        owner_id: "1",
+        file_name: "test.jpg",
+        generated_conversions: %{},
+        responsive_images: %{}
+      }
+
+      assert :ok = Media.delete_files(media)
+    end
+  end
+
+  describe "from_media_item/1 and to_media_item/1" do
+    test "converts MediaItem to Media and back" do
+      item = %PhxMediaLibrary.MediaItem{
+        uuid: "test-uuid",
+        name: "photo",
+        file_name: "photo.jpg",
+        mime_type: "image/jpeg",
+        disk: "memory",
+        size: 1024,
+        owner_type: "posts",
+        owner_id: "123"
+      }
+
+      media = Media.from_media_item(item)
+      assert %Media{} = media
+      assert media.uuid == "test-uuid"
+      assert media.owner_type == "posts"
+
+      back = Media.to_media_item(media)
+      assert %PhxMediaLibrary.MediaItem{} = back
+      assert back.uuid == "test-uuid"
+    end
   end
 end

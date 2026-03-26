@@ -91,8 +91,8 @@ defmodule PhxMediaLibraryTest do
         file_name: "test.jpg",
         mime_type: "image/jpeg",
         size: 1024,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       # Just verify it doesn't raise - actual URL depends on config
@@ -111,8 +111,8 @@ defmodule PhxMediaLibraryTest do
         mime_type: "image/jpeg",
         size: 1024,
         responsive_images: %{},
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       assert PhxMediaLibrary.srcset(media) == nil
@@ -133,8 +133,8 @@ defmodule PhxMediaLibraryTest do
             %{"width" => 640, "path" => "images/test-uuid/responsive/test-640.jpg"}
           ]
         },
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       srcset = PhxMediaLibrary.srcset(media)

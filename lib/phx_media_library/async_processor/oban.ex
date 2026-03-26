@@ -45,13 +45,9 @@ if Code.ensure_loaded?(Oban) do
     ## How It Works
 
     When media is uploaded and conversions are defined, the processor enqueues
-    an Oban job with the media ID, the conversion names, and the `mediable_type`
-    so the worker can look up the originating model module and retrieve the full
+    an Oban job with the `owner_module`, `owner_id`, `collection_name`, and
+    `item_uuid` so the worker can reconstruct the context and retrieve the full
     `Conversion` definitions (with dimensions, quality, fit mode, etc.).
-
-    This avoids the pitfall of serializing only conversion names and losing all
-    configuration — the previous implementation created empty `Conversion` structs
-    with only a `:name` field.
     """
 
     @behaviour PhxMediaLibrary.AsyncProcessor
@@ -59,13 +55,15 @@ if Code.ensure_loaded?(Oban) do
     alias PhxMediaLibrary.{Conversions, Workers.ProcessConversions}
 
     @impl true
-    def process_async(media, conversions) do
+    def process_async(context, conversions) do
       conversion_names = Enum.map(conversions, &to_string(&1.name))
 
       %{
-        media_id: media.id,
-        conversions: conversion_names,
-        mediable_type: media.mediable_type
+        owner_module: to_string(context.owner_module),
+        owner_id: to_string(context.owner_id),
+        collection_name: to_string(context.collection_name),
+        item_uuid: context.item_uuid,
+        conversions: conversion_names
       }
       |> ProcessConversions.new()
       |> Oban.insert()
@@ -82,12 +80,12 @@ if Code.ensure_loaded?(Oban) do
 
     ## Examples
 
-        PhxMediaLibrary.AsyncProcessor.Oban.process_sync(media, conversions)
+        PhxMediaLibrary.AsyncProcessor.Oban.process_sync(context, conversions)
 
     """
     @impl true
-    def process_sync(media, conversions) do
-      Conversions.process(media, conversions)
+    def process_sync(context, conversions) do
+      Conversions.process(context, conversions)
     end
   end
 
@@ -102,82 +100,85 @@ if Code.ensure_loaded?(Oban) do
 
     ## Job Args
 
-    - `"media_id"` — the binary ID of the `Media` record
+    - `"owner_module"` — the string name of the Ecto schema module (e.g. `"Elixir.MyApp.Post"`)
+    - `"owner_id"` — the string ID of the parent record
+    - `"collection_name"` — the collection name string (e.g. `"images"`)
+    - `"item_uuid"` — the UUID of the media item
     - `"conversions"` — list of conversion name strings (e.g. `["thumb", "preview"]`)
-    - `"mediable_type"` — the polymorphic type string (e.g. `"posts"`) used to
-      discover the originating Ecto schema module and its conversion definitions
     """
 
     use Oban.Worker,
       queue: :media,
       max_attempts: 3
 
-    alias PhxMediaLibrary.{Config, Conversion, Conversions, ModelRegistry}
+    alias PhxMediaLibrary.{Conversion, Conversions, ModelRegistry}
 
     require Logger
 
     @impl Oban.Worker
     def perform(%Oban.Job{
           args: %{
-            "media_id" => media_id,
-            "conversions" => conversion_names,
-            "mediable_type" => mediable_type
+            "owner_module" => owner_module_str,
+            "owner_id" => owner_id,
+            "collection_name" => collection_name,
+            "item_uuid" => item_uuid,
+            "conversions" => conversion_names
           }
         }) do
-      repo = Config.repo()
+      owner_module = safe_to_module(owner_module_str)
 
-      case repo.get(PhxMediaLibrary.Media, media_id) do
-        nil ->
+      context = %{
+        owner_module: owner_module,
+        owner_id: owner_id,
+        collection_name: collection_name,
+        item_uuid: item_uuid
+      }
+
+      conversions = resolve_conversions(owner_module, collection_name, conversion_names)
+
+      case conversions do
+        [] ->
           Logger.warning(
-            "[PhxMediaLibrary] Media #{media_id} not found, skipping conversion processing"
+            "[PhxMediaLibrary] No conversion definitions resolved for " <>
+              "#{owner_module_str}##{owner_id} collection=#{collection_name} " <>
+              "(requested: #{inspect(conversion_names)})"
           )
 
-          {:discard, :media_not_found}
+          :ok
 
-        media ->
-          conversions = resolve_conversions(mediable_type, conversion_names, media)
-
-          case conversions do
-            [] ->
-              Logger.warning(
-                "[PhxMediaLibrary] No conversion definitions resolved for media #{media_id} " <>
-                  "(requested: #{inspect(conversion_names)}, mediable_type: #{mediable_type})"
-              )
-
-              :ok
-
-            conversions ->
-              Conversions.process(media, conversions)
+        conversions ->
+          case Conversions.process(context, conversions) do
+            :ok -> :ok
+            {:error, :media_item_not_found} -> {:discard, :media_not_found}
+            {:error, reason} -> {:error, reason}
           end
       end
     end
 
-    # Also handle legacy job args that don't include mediable_type
+    # Handle legacy job args that use media_id and mediable_type
     def perform(%Oban.Job{
-          args: %{"media_id" => media_id, "conversions" => conversion_names}
+          args: %{
+            "media_id" => media_id,
+            "conversions" => _conversion_names,
+            "mediable_type" => mediable_type
+          }
         }) do
-      repo = Config.repo()
+      Logger.warning(
+        "[PhxMediaLibrary] Processing legacy Oban job with media_id=#{media_id}. " <>
+          "This format is deprecated and will be removed in a future version."
+      )
 
-      case repo.get(PhxMediaLibrary.Media, media_id) do
-        nil ->
-          {:discard, :media_not_found}
+      case ModelRegistry.find_model_module(mediable_type) do
+        {:ok, _module} ->
+          Logger.warning(
+            "[PhxMediaLibrary] Legacy job format cannot be processed with JSONB storage. " <>
+              "Job will be discarded. media_id=#{media_id}"
+          )
 
-        media ->
-          conversions =
-            resolve_conversions(media.mediable_type, conversion_names, media)
+          {:discard, :legacy_job_format}
 
-          case conversions do
-            [] ->
-              Logger.warning(
-                "[PhxMediaLibrary] No conversion definitions resolved for media #{media_id} " <>
-                  "(legacy job without mediable_type, requested: #{inspect(conversion_names)})"
-              )
-
-              :ok
-
-            conversions ->
-              Conversions.process(media, conversions)
-          end
+        :error ->
+          {:discard, :legacy_job_format}
       end
     end
 
@@ -186,48 +187,53 @@ if Code.ensure_loaded?(Oban) do
     # -------------------------------------------------------------------------
 
     @doc false
-    def resolve_conversions(mediable_type, conversion_names, media) do
+    def resolve_conversions(owner_module, collection_name, conversion_names) do
       requested_atoms = Enum.map(conversion_names, &safe_to_atom/1)
+      collection_atom = safe_to_atom(collection_name)
 
-      case ModelRegistry.find_model_module(mediable_type) do
-        {:ok, module} ->
-          collection_name = safe_to_atom(media.collection_name)
+      # Check if the module has any conversion definitions
+      has_conversions? =
+        function_exported?(owner_module, :get_media_conversions, 1) or
+          function_exported?(owner_module, :media_conversions, 0)
 
-          module
-          |> ModelRegistry.get_model_conversions(collection_name)
-          |> Enum.filter(fn %Conversion{name: name} -> name in requested_atoms end)
+      if has_conversions? do
+        owner_module
+        |> ModelRegistry.get_model_conversions(collection_atom)
+        |> Enum.filter(fn %Conversion{name: name} -> name in requested_atoms end)
+      else
+        Logger.warning(
+          "[PhxMediaLibrary] Could not resolve conversions for #{inspect(owner_module)}. " <>
+            "Falling back to name-only conversions (no dimensions/quality/format)."
+        )
 
-        :error ->
-          Logger.warning(
-            "[PhxMediaLibrary] Could not find model module for mediable_type #{inspect(mediable_type)}. " <>
-              "Falling back to name-only conversions (no dimensions/quality/format)."
-          )
-
-          # Last resort fallback: create minimal Conversion structs.
-          # These will have default values (:contain fit, no width/height)
-          # which is better than silently doing nothing, but may produce
-          # unexpected results. The warning above alerts the developer.
-          Enum.map(requested_atoms, &Conversion.new(&1, []))
+        requested_atoms
+        |> Enum.map(&Conversion.new(&1, []))
       end
+    rescue
+      error ->
+        Logger.warning(
+          "[PhxMediaLibrary] Error resolving conversions for #{inspect(owner_module)}: #{inspect(error)}. " <>
+            "Falling back to name-only conversions."
+        )
+
+        conversion_names
+        |> Enum.map(&safe_to_atom/1)
+        |> Enum.map(&Conversion.new(&1, []))
     end
 
-    # -------------------------------------------------------------------------
-    # Model Module Discovery — delegates to ModelRegistry
-    # -------------------------------------------------------------------------
-
-    @doc """
-    Finds the model module for the given mediable type.
-
-    Delegates to `PhxMediaLibrary.ModelRegistry.find_model_module/1`.
-    Kept for backwards compatibility.
-    """
-    @spec find_model_module(String.t()) :: {:ok, module()} | :error
+    @doc false
     defdelegate find_model_module(mediable_type), to: ModelRegistry
 
-    # Safely converts a string to an existing atom, returning the string
-    # as-is (converted to atom via String.to_existing_atom) if it exists,
-    # or falling back to String.to_atom for known-safe internal values
-    # like conversion names that were originally atoms.
+    # -------------------------------------------------------------------------
+    # Helpers
+    # -------------------------------------------------------------------------
+
+    defp safe_to_module(str) when is_binary(str) do
+      String.to_existing_atom(str)
+    rescue
+      ArgumentError -> String.to_atom(str)
+    end
+
     defp safe_to_atom(value) when is_atom(value), do: value
 
     defp safe_to_atom(value) when is_binary(value) do

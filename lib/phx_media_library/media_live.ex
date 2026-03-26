@@ -71,7 +71,7 @@ defmodule PhxMediaLibrary.MediaLive do
 
   use Phoenix.LiveComponent
 
-  alias PhxMediaLibrary.{Collection, Config, Media}
+  alias PhxMediaLibrary.{Collection, MediaItem}
 
   # ===========================================================================
   # Lifecycle
@@ -158,7 +158,7 @@ defmodule PhxMediaLibrary.MediaLive do
     {successes, failures} =
       Enum.split_with(results, fn
         {:error, _} -> false
-        %Media{} -> true
+        %MediaItem{} -> true
         _ -> true
       end)
 
@@ -186,27 +186,23 @@ defmodule PhxMediaLibrary.MediaLive do
     {:noreply, socket}
   end
 
-  def handle_event("delete_media", %{"id" => id}, socket) do
-    repo = Config.repo()
-    collection_name = socket.assigns.collection
+  def handle_event("delete_media", %{"id" => uuid}, socket) do
+    %{model: model, collection: collection_name} = socket.assigns
 
-    case repo.get(Media, id) do
-      nil ->
+    case PhxMediaLibrary.delete_media(model, collection_name, uuid) do
+      {:ok, media} ->
+        notify_parent(socket, {:deleted, collection_name, media})
+
+        {:noreply,
+         socket
+         |> stream_delete_by_dom_id(:media_items, "media-#{uuid}")
+         |> put_flash(:info, "File deleted")}
+
+      {:error, :not_found} ->
         {:noreply, put_flash(socket, :error, "File not found")}
 
-      media ->
-        case Media.delete(media) do
-          result when result == :ok or (is_tuple(result) and elem(result, 0) == :ok) ->
-            notify_parent(socket, {:deleted, collection_name, media})
-
-            {:noreply,
-             socket
-             |> stream_delete_by_dom_id(:media_items, "media-#{id}")
-             |> put_flash(:info, "File deleted")}
-
-          {:error, reason} ->
-            {:noreply, put_flash(socket, :error, "Delete failed: #{inspect(reason)}")}
-        end
+      {:error, reason} ->
+        {:noreply, put_flash(socket, :error, "Delete failed: #{inspect(reason)}")}
     end
   end
 
@@ -605,7 +601,7 @@ defmodule PhxMediaLibrary.MediaLive do
           <button
             type="button"
             phx-click="delete_media"
-            phx-value-id={@media.id}
+            phx-value-id={@media.uuid}
             phx-target={@myself}
             data-confirm="Are you sure you want to delete this file?"
             class={[
@@ -690,7 +686,7 @@ defmodule PhxMediaLibrary.MediaLive do
     media_items = PhxMediaLibrary.get_media(model, collection_name)
 
     socket
-    |> stream_configure(:media_items, dom_id: &"media-#{&1.id}")
+    |> stream_configure(:media_items, dom_id: &"media-#{&1.uuid}")
     |> stream(:media_items, media_items)
   end
 
@@ -699,7 +695,7 @@ defmodule PhxMediaLibrary.MediaLive do
       socket
     else
       socket
-      |> stream_configure(:media_items, dom_id: &"media-#{&1.id}")
+      |> stream_configure(:media_items, dom_id: &"media-#{&1.uuid}")
       |> stream(:media_items, [])
     end
   end
@@ -776,10 +772,6 @@ defmodule PhxMediaLibrary.MediaLive do
 
   defp image_entry?(_), do: false
 
-  defp image_media?(%Media{mime_type: mime_type}) when is_binary(mime_type) do
-    String.starts_with?(mime_type, "image/")
-  end
-
   defp image_media?(%{mime_type: mime_type}) when is_binary(mime_type) do
     String.starts_with?(mime_type, "image/")
   end
@@ -787,12 +779,18 @@ defmodule PhxMediaLibrary.MediaLive do
   defp image_media?(_), do: false
 
   defp media_url(media, conversion) do
-    if conversion && Media.has_conversion?(media, conversion) do
+    if conversion && has_conversion?(media, conversion) do
       PhxMediaLibrary.url(media, conversion)
     else
       PhxMediaLibrary.url(media)
     end
   end
+
+  defp has_conversion?(%{generated_conversions: conversions}, name) do
+    Map.get(conversions, to_string(name), false) == true
+  end
+
+  defp has_conversion?(_, _), do: false
 
   defp file_type_icon(mime_type) do
     cond do

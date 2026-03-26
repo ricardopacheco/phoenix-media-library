@@ -84,11 +84,7 @@ defmodule PhxMediaLibrary.HasMedia.DSL.CollectionAccumulator do
 
       # Clear convert/conversion imports from HasMedia to avoid ambiguity
       # with the nested accumulator's versions.
-      import PhxMediaLibrary.HasMedia,
-        only: [
-          has_media: 0,
-          has_media: 1
-        ]
+      import PhxMediaLibrary.HasMedia, only: []
 
       import PhxMediaLibrary.HasMedia.DSL.NestedConversionAccumulator
 
@@ -103,8 +99,6 @@ defmodule PhxMediaLibrary.HasMedia.DSL.CollectionAccumulator do
 
       import PhxMediaLibrary.HasMedia,
         only: [
-          has_media: 0,
-          has_media: 1,
           conversion: 2,
           convert: 2
         ]

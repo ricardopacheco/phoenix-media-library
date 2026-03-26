@@ -28,25 +28,30 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # perform/1 — with mediable_type in args
+  # perform/1 — with context map args (owner_module, owner_id, collection_name, item_uuid)
   # ---------------------------------------------------------------------------
 
-  describe "perform/1 with mediable_type" do
-    test "discards job when media record does not exist" do
+  describe "perform/1 with context map args" do
+    test "discards job when media item does not exist" do
+      post = Fixtures.create_test_post()
+
       assert {:discard, :media_not_found} ==
                Oban.Testing.perform_job(
                  ProcessConversions,
                  %{
-                   "media_id" => Ecto.UUID.generate(),
-                   "conversions" => ["thumb"],
-                   "mediable_type" => "posts"
+                   "owner_module" => "Elixir.PhxMediaLibrary.TestPost",
+                   "owner_id" => post.id,
+                   "collection_name" => "images",
+                   "item_uuid" => Ecto.UUID.generate(),
+                   "conversions" => ["thumb"]
                  },
                  []
                )
     end
 
     test "returns :ok when no conversions are resolved" do
-      media = Fixtures.create_media(collection_name: "default", mediable_type: "posts")
+      post = Fixtures.create_test_post()
+      media = Fixtures.create_media(%{collection_name: "default", post: post})
 
       log =
         capture_log(fn ->
@@ -54,9 +59,11 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
                    Oban.Testing.perform_job(
                      ProcessConversions,
                      %{
-                       "media_id" => media.id,
-                       "conversions" => ["nonexistent_conversion"],
-                       "mediable_type" => "posts"
+                       "owner_module" => "Elixir.PhxMediaLibrary.TestPost",
+                       "owner_id" => to_string(post.id),
+                       "collection_name" => "default",
+                       "item_uuid" => media.uuid,
+                       "conversions" => ["nonexistent_conversion"]
                      },
                      []
                    )
@@ -66,7 +73,8 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
     end
 
     test "returns :ok with empty conversion list" do
-      media = Fixtures.create_media(collection_name: "images", mediable_type: "posts")
+      post = Fixtures.create_test_post()
+      media = Fixtures.create_media(%{collection_name: "images", post: post})
 
       log =
         capture_log(fn ->
@@ -74,9 +82,11 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
                    Oban.Testing.perform_job(
                      ProcessConversions,
                      %{
-                       "media_id" => media.id,
-                       "conversions" => [],
-                       "mediable_type" => "posts"
+                       "owner_module" => "Elixir.PhxMediaLibrary.TestPost",
+                       "owner_id" => to_string(post.id),
+                       "collection_name" => "images",
+                       "item_uuid" => media.uuid,
+                       "conversions" => []
                      },
                      []
                    )
@@ -87,40 +97,26 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
   end
 
   # ---------------------------------------------------------------------------
-  # perform/1 — legacy args (no mediable_type)
+  # perform/1 — legacy args (media_id + mediable_type)
   # ---------------------------------------------------------------------------
 
-  describe "perform/1 with legacy args (no mediable_type)" do
-    test "discards job when media record does not exist" do
-      assert {:discard, :media_not_found} ==
-               Oban.Testing.perform_job(
-                 ProcessConversions,
-                 %{
-                   "media_id" => Ecto.UUID.generate(),
-                   "conversions" => ["thumb"]
-                 },
-                 []
-               )
-    end
-
-    test "falls back to media.mediable_type for resolution" do
-      media = Fixtures.create_media(collection_name: "images", mediable_type: "posts")
-
+  describe "perform/1 with legacy args" do
+    test "discards job with legacy format warning" do
       log =
         capture_log(fn ->
-          assert :ok ==
+          assert {:discard, :legacy_job_format} ==
                    Oban.Testing.perform_job(
                      ProcessConversions,
                      %{
-                       "media_id" => media.id,
-                       "conversions" => ["nonexistent_conversion"]
+                       "media_id" => Ecto.UUID.generate(),
+                       "conversions" => ["thumb"],
+                       "mediable_type" => "posts"
                      },
                      []
                    )
         end)
 
-      assert log =~ "No conversion definitions resolved"
-      assert log =~ "legacy job without mediable_type"
+      assert log =~ "Legacy job format"
     end
   end
 
@@ -130,9 +126,12 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
 
   describe "resolve_conversions/3" do
     test "resolves full conversion definitions from TestPost" do
-      media = Fixtures.create_media(collection_name: "images", mediable_type: "posts")
-
-      conversions = ProcessConversions.resolve_conversions("posts", ["thumb", "preview"], media)
+      conversions =
+        ProcessConversions.resolve_conversions(
+          PhxMediaLibrary.TestPost,
+          "images",
+          ["thumb", "preview"]
+        )
 
       assert length(conversions) == 2
 
@@ -149,19 +148,25 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
     end
 
     test "filters conversions to only those requested" do
-      media = Fixtures.create_media(collection_name: "images", mediable_type: "posts")
-
-      conversions = ProcessConversions.resolve_conversions("posts", ["thumb"], media)
+      conversions =
+        ProcessConversions.resolve_conversions(
+          PhxMediaLibrary.TestPost,
+          "images",
+          ["thumb"]
+        )
 
       assert length(conversions) == 1
       assert hd(conversions).name == :thumb
     end
 
     test "respects collection-scoped conversions" do
-      media = Fixtures.create_media(collection_name: "images", mediable_type: "posts")
-
       # :banner is only for :images collection
-      conversions = ProcessConversions.resolve_conversions("posts", ["banner"], media)
+      conversions =
+        ProcessConversions.resolve_conversions(
+          PhxMediaLibrary.TestPost,
+          "images",
+          ["banner"]
+        )
 
       assert length(conversions) == 1
       assert hd(conversions).name == :banner
@@ -169,21 +174,25 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
       assert hd(conversions).height == 400
 
       # :banner should NOT resolve for :documents collection
-      doc_media = Fixtures.create_media(collection_name: "documents", mediable_type: "posts")
-
       doc_conversions =
-        ProcessConversions.resolve_conversions("posts", ["banner"], doc_media)
+        ProcessConversions.resolve_conversions(
+          PhxMediaLibrary.TestPost,
+          "documents",
+          ["banner"]
+        )
 
       assert doc_conversions == []
     end
 
-    test "falls back to name-only conversions for unknown mediable_type" do
-      media = Fixtures.create_media(collection_name: "default", mediable_type: "unknown_type")
-
+    test "falls back to name-only conversions for unknown module" do
       log =
         capture_log(fn ->
           conversions =
-            ProcessConversions.resolve_conversions("unknown_type", ["thumb"], media)
+            ProcessConversions.resolve_conversions(
+              NonExistentModule,
+              "default",
+              ["thumb"]
+            )
 
           assert length(conversions) == 1
           assert hd(conversions).name == :thumb
@@ -192,18 +201,17 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
           assert hd(conversions).height == nil
         end)
 
-      assert log =~ "Could not find model module"
+      assert log =~ "Could not resolve conversions"
       assert log =~ "Falling back to name-only conversions"
     end
 
     test "returns empty list when requested conversions don't match any model definitions" do
-      media = Fixtures.create_media(collection_name: "images", mediable_type: "posts")
-
-      # "does_not_exist" is not a conversion defined on TestPost, so it
-      # should be filtered out after resolve. Since the model IS found,
-      # we get the full list and filter — no match means empty list.
       conversions =
-        ProcessConversions.resolve_conversions("posts", ["does_not_exist"], media)
+        ProcessConversions.resolve_conversions(
+          PhxMediaLibrary.TestPost,
+          "images",
+          ["does_not_exist"]
+        )
 
       assert conversions == []
     end
@@ -256,30 +264,34 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
   # ---------------------------------------------------------------------------
 
   describe "ProcessConversions.new/1 builds correct job changesets" do
-    test "includes media_id, conversions, and mediable_type in args" do
-      media_id = Ecto.UUID.generate()
+    test "includes context fields in args" do
+      item_uuid = Ecto.UUID.generate()
 
       changeset =
         ProcessConversions.new(%{
-          media_id: media_id,
-          conversions: ["thumb", "preview"],
-          mediable_type: "posts"
+          owner_module: "Elixir.PhxMediaLibrary.TestPost",
+          owner_id: Ecto.UUID.generate(),
+          collection_name: "images",
+          item_uuid: item_uuid,
+          conversions: ["thumb", "preview"]
         })
 
       # Oban changesets store args with atom keys before serialization
       args = changeset.changes.args
 
-      assert args.media_id == media_id
+      assert args.item_uuid == item_uuid
       assert args.conversions == ["thumb", "preview"]
-      assert args.mediable_type == "posts"
+      assert args.collection_name == "images"
     end
 
     test "uses the :media queue with max_attempts of 3" do
       changeset =
         ProcessConversions.new(%{
-          media_id: Ecto.UUID.generate(),
-          conversions: ["thumb"],
-          mediable_type: "posts"
+          owner_module: "Elixir.PhxMediaLibrary.TestPost",
+          owner_id: Ecto.UUID.generate(),
+          collection_name: "images",
+          item_uuid: Ecto.UUID.generate(),
+          conversions: ["thumb"]
         })
 
       assert changeset.changes.queue == "media"
@@ -292,11 +304,11 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
   # ---------------------------------------------------------------------------
 
   describe "AsyncProcessor.Oban.process_async/2" do
-    test "constructs job with correct conversion names and mediable_type" do
+    test "constructs job with correct conversion names" do
       # We can't call process_async directly without an Oban instance,
       # but we can verify the worker module builds the right args by
       # testing new/1 with the same args that process_async would build.
-      media_id = Ecto.UUID.generate()
+      item_uuid = Ecto.UUID.generate()
 
       conversions = [
         Conversion.new(:thumb, width: 150, height: 150),
@@ -307,16 +319,17 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
 
       changeset =
         ProcessConversions.new(%{
-          media_id: media_id,
-          conversions: conversion_names,
-          mediable_type: "posts"
+          owner_module: "Elixir.PhxMediaLibrary.TestPost",
+          owner_id: Ecto.UUID.generate(),
+          collection_name: "images",
+          item_uuid: item_uuid,
+          conversions: conversion_names
         })
 
       args = changeset.changes.args
 
-      assert args.media_id == media_id
+      assert args.item_uuid == item_uuid
       assert args.conversions == ["thumb", "preview"]
-      assert args.mediable_type == "posts"
     end
   end
 end

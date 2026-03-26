@@ -15,11 +15,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     schema "dsl_posts" do
       field(:title, :string)
 
-      has_media()
-      has_media(:images)
-      has_media(:documents)
-      has_media(:avatar)
-
       timestamps(type: :utc_datetime)
     end
 
@@ -43,7 +38,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "dsl_conversion_keyword" do
       field(:name, :string)
-      has_media()
     end
 
     media_conversions do
@@ -60,7 +54,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "function_posts" do
       field(:title, :string)
-      has_media()
       timestamps(type: :utc_datetime)
     end
 
@@ -86,8 +79,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "blog_post_table" do
       field(:title, :string)
-      has_media()
-      has_media(:images)
     end
   end
 
@@ -99,7 +90,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "custom_posts" do
       field(:title, :string)
-      has_media()
     end
 
     def __media_type__, do: "my_custom_type"
@@ -113,7 +103,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "minimal_items" do
       field(:name, :string)
-      has_media()
     end
   end
 
@@ -125,7 +114,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "nested_dsl_posts" do
       field(:title, :string)
-      has_media()
       timestamps(type: :utc_datetime)
     end
 
@@ -153,7 +141,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "mixed_nested_flat" do
       field(:name, :string)
-      has_media()
     end
 
     media_collections do
@@ -177,7 +164,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "nested_explicit" do
       field(:name, :string)
-      has_media()
     end
 
     media_collections do
@@ -197,7 +183,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     @primary_key {:id, :binary_id, autogenerate: true}
     schema "mixed_items" do
       field(:name, :string)
-      has_media()
     end
 
     media_collections do
@@ -508,81 +493,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
   end
 
   # ---------------------------------------------------------------------------
-  # has_many injection
-  # ---------------------------------------------------------------------------
-
-  describe "has_media() injects has_many :media" do
-    test "schema has :media association" do
-      assert :media in DSLPost.__schema__(:associations)
-    end
-
-    test ":media association points to PhxMediaLibrary.Media" do
-      assoc = DSLPost.__schema__(:association, :media)
-      assert assoc.related == PhxMediaLibrary.Media
-    end
-
-    test ":media association uses :mediable_id as foreign key" do
-      assoc = DSLPost.__schema__(:association, :media)
-      assert assoc.related_key == :mediable_id
-    end
-
-    test ":media association has mediable_type where clause" do
-      assoc = DSLPost.__schema__(:association, :media)
-      assert assoc.where == [mediable_type: "dsl_posts"]
-    end
-
-    test ":media association has mediable_type defaults" do
-      assoc = DSLPost.__schema__(:association, :media)
-      assert assoc.defaults == [mediable_type: "dsl_posts"]
-    end
-
-    test ":media is a :many cardinality" do
-      assoc = DSLPost.__schema__(:association, :media)
-      assert assoc.cardinality == :many
-    end
-  end
-
-  describe "has_media(:collection) injects collection-scoped has_many" do
-    test "schema has collection-scoped associations" do
-      assocs = DSLPost.__schema__(:associations)
-
-      assert :images in assocs
-      assert :documents in assocs
-      assert :avatar in assocs
-    end
-
-    test "collection association filters by mediable_type and collection_name" do
-      images_assoc = DSLPost.__schema__(:association, :images)
-
-      assert images_assoc.where == [
-               mediable_type: "dsl_posts",
-               collection_name: "images"
-             ]
-    end
-
-    test "collection association has correct defaults" do
-      avatar_assoc = DSLPost.__schema__(:association, :avatar)
-
-      assert avatar_assoc.defaults == [
-               mediable_type: "dsl_posts",
-               collection_name: "avatar"
-             ]
-    end
-
-    test "collection associations use :mediable_id as foreign key" do
-      docs_assoc = DSLPost.__schema__(:association, :documents)
-      assert docs_assoc.related_key == :mediable_id
-    end
-
-    test "all collection associations point to Media" do
-      for name <- [:images, :documents, :avatar] do
-        assoc = DSLPost.__schema__(:association, name)
-        assert assoc.related == PhxMediaLibrary.Media
-      end
-    end
-  end
-
-  # ---------------------------------------------------------------------------
   # Polymorphic type derivation (Milestone 2.6)
   # ---------------------------------------------------------------------------
 
@@ -599,20 +509,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
 
     test "user-defined __media_type__/0 takes precedence" do
       assert CustomTypePost.__media_type__() == "my_custom_type"
-    end
-
-    test "has_many :where uses overridden type" do
-      assoc = OverriddenTypePost.__schema__(:association, :media)
-      assert assoc.where == [mediable_type: "blog_posts"]
-    end
-
-    test "has_many collection :where uses overridden type" do
-      assoc = OverriddenTypePost.__schema__(:association, :images)
-
-      assert assoc.where == [
-               mediable_type: "blog_posts",
-               collection_name: "images"
-             ]
     end
   end
 
@@ -693,7 +589,7 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     end
   end
 
-  describe "Media schema checksum fields" do
+  describe "Media struct checksum fields" do
     test "has checksum field" do
       media = %Media{}
       assert Map.has_key?(media, :checksum)
@@ -703,29 +599,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     test "has checksum_algorithm field with default" do
       media = %Media{}
       assert Map.has_key?(media, :checksum_algorithm)
-      assert media.checksum_algorithm == "sha256"
-    end
-
-    test "changeset accepts checksum fields" do
-      attrs = %{
-        uuid: Ecto.UUID.generate(),
-        collection_name: "images",
-        name: "test",
-        file_name: "test.jpg",
-        mime_type: "image/jpeg",
-        disk: "local",
-        size: 100,
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate(),
-        checksum: "abc123def456",
-        checksum_algorithm: "sha256"
-      }
-
-      changeset = Media.changeset(%Media{}, attrs)
-      assert changeset.valid?
-
-      media = Ecto.Changeset.apply_changes(changeset)
-      assert media.checksum == "abc123def456"
       assert media.checksum_algorithm == "sha256"
     end
   end
@@ -842,8 +715,8 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
         collection_name: "images",
         name: "test",
         file_name: "test.jpg",
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       # Even though the file doesn't exist on disk, full_path should return
@@ -861,8 +734,8 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
         collection_name: "images",
         name: "test",
         file_name: "test.jpg",
-        mediable_type: "posts",
-        mediable_id: Ecto.UUID.generate()
+        owner_type: "posts",
+        owner_id: Ecto.UUID.generate()
       }
 
       # Memory adapter defines path/2 but it returns nil (no filesystem).
@@ -894,33 +767,6 @@ defmodule PhxMediaLibrary.HasMediaDSLTest do
     test "custom __media_type__/0 function is respected" do
       post = %CustomTypePost{id: Ecto.UUID.generate(), title: "Test"}
       assert post.__struct__.__media_type__() == "my_custom_type"
-    end
-  end
-
-  # ---------------------------------------------------------------------------
-  # PhxMediaLibrary.media_query/2
-  # ---------------------------------------------------------------------------
-
-  describe "PhxMediaLibrary.media_query/2" do
-    test "returns an Ecto.Query" do
-      post = %PhxMediaLibrary.TestPost{id: Ecto.UUID.generate(), title: "Test"}
-
-      query = PhxMediaLibrary.media_query(post)
-      assert %Ecto.Query{} = query
-    end
-
-    test "query targets Media schema" do
-      post = %PhxMediaLibrary.TestPost{id: Ecto.UUID.generate(), title: "Test"}
-
-      query = PhxMediaLibrary.media_query(post)
-      assert query.from.source == {"media", PhxMediaLibrary.Media}
-    end
-
-    test "query with collection name is still an Ecto.Query" do
-      post = %PhxMediaLibrary.TestPost{id: Ecto.UUID.generate(), title: "Test"}
-
-      query = PhxMediaLibrary.media_query(post, :images)
-      assert %Ecto.Query{} = query
     end
   end
 
