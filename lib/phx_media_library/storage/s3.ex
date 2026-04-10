@@ -180,7 +180,7 @@ if Code.ensure_loaded?(ExAws.S3) do
 
     defp ex_aws_opts(opts) do
       opts
-      |> Keyword.take([:access_key_id, :secret_access_key, :region])
+      |> Keyword.take([:access_key_id, :secret_access_key, :region, :scheme, :host, :port])
       |> Enum.reject(fn {_, v} -> is_nil(v) end)
     end
   end
