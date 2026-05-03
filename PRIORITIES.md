@@ -1,5 +1,60 @@
 # PhxMediaLibrary — Priorities & Roadmap
 
+> ## ⚠️ Fork notice
+>
+> This document is upstream's milestone roadmap, kept here for historical
+> reference. **Items marked ✅ in upstream do not always apply to this
+> fork** — the JSONB storage refactor replaced the polymorphic `media`
+> table, dropping soft deletes and polymorphic `has_many :media`. See the
+> JSONB notice in [CHANGELOG.md](CHANGELOG.md) for what's replaced and
+> what's added.
+>
+> The fork's own roadmap lives below in [Fork Roadmap](#fork-roadmap).
+> What follows the Fork Roadmap is upstream's original document, preserved
+> verbatim.
+
+## Fork Roadmap
+
+Items the fork is actively working on (post-v0.6.0 sync). Listed in
+priority order; status as of latest commit on `upgrade-to-v060`:
+
+- [x] **JSONB storage refactor** — replace polymorphic `media` table with
+  embedded JSONB columns on each parent schema.
+- [x] **v0.6.0 upstream sync** — cherry-pick Wave 1 / Wave 2 / Wave 3 +
+  S3 multipart fix, adapting each to the JSONB model.
+- [x] **`mix doctor` / `mix stats` JSONB rewrite** — walk
+  `ModelRegistry.all_models/0` and aggregate JSONB at the SQL level
+  instead of querying a media table.
+- [x] **`Components.ex` audit + render tests** — fix `blurhash/1`'s
+  `@media.id` bug; cover Wave 2 / Wave 3 components against `MediaItem`.
+- [x] **`Storage.S3` to 100% coverage against real RustFS** — surfaced
+  and fixed a critical multipart upload truncation bug in upstream's
+  `rechunk/2`.
+- [x] **CHANGELOG / PRIORITIES revision** — fork notice, JSONB
+  implementation notes.
+- [ ] **Async leak warnings in test output** — `Conversions.process/2`
+  running past test boundaries leaves `Postgrex.Protocol failed to
+  connect` lines in stderr. Cosmetic, but clouds the test signal.
+- [ ] **`metadata_extractor` documentation** — note that video metadata
+  extraction silently no-ops without `ffprobe` on `$PATH`.
+- [ ] **Suite-wide coverage bump** — extend the testing approach used for
+  `Storage.S3` to other modules with low coverage. Target: 90%+ across
+  the public API.
+
+### Not ported / will not be ported
+
+- **Soft deletes** (upstream's Milestone 3c). `delete/1`, `restore/1`,
+  `trashed?/1`, `purge_trashed/2`, `exclude_trashed/1`, `only_trashed/1`,
+  `mix phx_media_library.purge_deleted`. Hard delete only on this fork.
+- **Polymorphic `has_many :media` association** injected by `has_media()`.
+  Without a media table, there's nothing to associate.
+- **`Media` as Ecto schema** — replaced by a plain struct used as a
+  "view" type, convertible from `MediaItem`.
+- **`Media.changeset/2`, `Media.permanently_delete/1`, `Media.for_model/2`,
+  `Media.soft_deletes_enabled?/0`.**
+
+---
+
 This document tracks the priorities for developing PhxMediaLibrary. It is ordered by what matters most: **Developer Experience first**.
 
 The guiding principle: *every feature should reduce repetitive work for the developer using this library.*
@@ -415,49 +470,50 @@ end
 
 ---
 
-## Milestone 4 — Best-in-Class
+## Milestone 4 — Best-in-Class ✅
 
 **Goal**: Features that make this library the definitive choice in the ecosystem.
 
-### 4.1 — Blurhash Generation
+### 4.1 — Blurhash Generation ✅
 
-- [ ] Generate blurhash strings as an alternative to tiny JPEG placeholders
-- [ ] Store in `responsive_images` metadata
-- [ ] Ship a `<.blurhash>` component that renders the placeholder client-side
-- [ ] Much smaller payload than base64 JPEG placeholders
+- [x] Generate blurhash strings as an alternative to tiny JPEG placeholders
+- [x] Store in `responsive_images` metadata
+- [x] Ship a `<.blurhash>` component that renders the placeholder client-side (colocated JS hook, no npm)
+- [x] Much smaller payload than base64 JPEG placeholders (~25 bytes vs ~500–2 KB)
 
-### 4.2 — Video Support
+### 4.2 — Video Support ✅
 
-- [ ] Extract video thumbnails (via FFmpeg adapter)
-- [ ] Store video metadata (duration, resolution, codec)
-- [ ] Generate video preview (short clip / GIF)
-- [ ] `<.media_video>` component with poster frame
+- [x] Extract video metadata (duration, dimensions, codec, fps) via `VideoProcessor.FFmpeg`
+- [x] Store video metadata in `media.metadata` on every video upload when FFmpeg is available
+- [x] Generate JPEG poster frame stored in `media.responsive_images["poster"]`
+- [x] `<.media_video>` component with poster frame and metadata strip
 
-### 4.3 — Multi-Tenant Support
+### 4.3 — Multi-Tenant Support ✅
 
-- [ ] Scoped storage paths: `{tenant_id}/{mediable_type}/{id}/...`
-- [ ] Per-tenant storage configuration (different S3 buckets)
-- [ ] Query scoping by tenant
+- [x] Scoped storage paths via `PathGenerator.Tenant`: `{tenant_id}/{mediable_type}/{id}/...`
+- [x] `path_context` escape hatch threads tenant ID through any custom generator
+- [x] Per-tenant storage configuration via `:disk` option at upload time
+- [x] Multi-tenant guide covering all patterns (`guides/multi-tenant.md`)
 
-### 4.4 — Content Delivery Optimization
+### 4.4 — Content Delivery Optimization ✅
 
-- [ ] CDN URL generation with cache-busting (checksum in URL)
-- [ ] Signed/expiring URLs for private media
+- [x] CDN URL generation with cache-busting (`?v={checksum[0..7]}`); `cdn_url/2` convenience helper
+- [x] Signed/expiring URLs — S3 presigned GET; HMAC-SHA256 for local disk via `Plug.MediaDownload`
 - [ ] On-the-fly image transformation URLs (like Imgix/Cloudinary)
-- [ ] Content-Disposition headers for download links
+- [x] Content-Disposition download links — `download_url/3`; `Plug.MediaDownload` for local, `response-content-disposition` for S3
 
-### 4.5 — Admin & Debugging Tools
+### 4.5 — Admin & Debugging Tools ✅
 
-- [ ] Mix task: `mix phx_media_library.stats` — show storage usage per model/collection
-- [ ] Mix task: `mix phx_media_library.doctor` — diagnose common issues (missing files, orphaned records, broken conversions)
+- [x] Mix task: `mix phx_media_library.stats` — storage usage per model/collection with `--collection`, `--type`, `--include-trashed` flags
+- [x] Mix task: `mix phx_media_library.doctor` — diagnose missing files, orphaned records, broken conversions; `--fix`, `--skip-files`, `--skip-orphans` flags
 - [ ] Optional LiveDashboard page showing media stats
 
-### 4.6 — Custom Path Generator Behaviour
+### 4.6 — Custom Path Generator Behaviour ✅
 
-- [ ] Allow users to define their own path structure
-- [ ] Default: `{mediable_type}/{mediable_id}/{uuid}/{filename}`
-- [ ] Flat: `{uuid}/{filename}`
-- [ ] Date-based: `{year}/{month}/{day}/{uuid}/{filename}`
+- [x] `PathGenerator` behaviour with pluggable implementations
+- [x] Built-ins: `Default` (`{type}/{id}/{uuid}/{filename}`), `Flat` (`{uuid}/{filename}`), `DateBased` (`{year}/{month}/{day}/{type}/{id}/{uuid}/{filename}`), `Tenant` (`{tenant_id}/{type}/{id}/{uuid}/{filename}`)
+- [x] `path_context` escape hatch for tenant/user scoping without schema coupling
+- [x] `Config.path_generator/0` with application-level configuration
 
 ---
 

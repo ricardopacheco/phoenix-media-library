@@ -75,6 +75,34 @@ defmodule PhxMediaLibrary.Config do
   end
 
   @doc """
+  Get the configured path generator module.
+
+  The path generator controls how storage paths are constructed for media
+  files and conversions. Any module that implements the
+  `PhxMediaLibrary.PathGenerator` behaviour can be used here.
+
+  Built-in generators:
+
+    * `PhxMediaLibrary.PathGenerator.Default` — `{type}/{id}/{uuid}/{filename}` (default)
+    * `PhxMediaLibrary.PathGenerator.Flat` — `{uuid}/{filename}`
+    * `PhxMediaLibrary.PathGenerator.DateBased` — `{year}/{month}/{day}/{type}/{id}/{uuid}/{filename}`
+    * `PhxMediaLibrary.PathGenerator.Tenant` — `{tenant_id}/{type}/{id}/{uuid}/{filename}`
+
+  ## Configuration
+
+      config :phx_media_library,
+        path_generator: PhxMediaLibrary.PathGenerator.DateBased
+
+  """
+  def path_generator do
+    Application.get_env(
+      :phx_media_library,
+      :path_generator,
+      PhxMediaLibrary.PathGenerator.Default
+    )
+  end
+
+  @doc """
   Get the image processor module.
 
   Defaults to `PhxMediaLibrary.ImageProcessor.Image` when the `:image`
@@ -95,6 +123,40 @@ defmodule PhxMediaLibrary.Config do
       PhxMediaLibrary.ImageProcessor.Image
     else
       PhxMediaLibrary.ImageProcessor.Null
+    end
+  end
+
+  @doc """
+  Get the video processor module.
+
+  Defaults to `PhxMediaLibrary.VideoProcessor.FFmpeg` when both `ffprobe`
+  and `ffmpeg` executables are found on `$PATH`, otherwise falls back to
+  `PhxMediaLibrary.VideoProcessor.Null`.
+
+  When FFmpeg is available, video metadata (duration, dimensions, codec, fps)
+  is extracted automatically on every video upload and a JPEG poster frame is
+  stored alongside the video file.
+
+  ## Configuration
+
+      config :phx_media_library,
+        video_processor: MyApp.CustomVideoProcessor
+
+  """
+  @spec video_processor() :: module()
+  def video_processor do
+    Application.get_env(
+      :phx_media_library,
+      :video_processor,
+      default_video_processor()
+    )
+  end
+
+  defp default_video_processor do
+    if PhxMediaLibrary.VideoProcessor.FFmpeg.available?() do
+      PhxMediaLibrary.VideoProcessor.FFmpeg
+    else
+      PhxMediaLibrary.VideoProcessor.Null
     end
   end
 
@@ -135,6 +197,57 @@ defmodule PhxMediaLibrary.Config do
   """
   def tiny_placeholders_enabled? do
     Keyword.get(responsive_images_config(), :tiny_placeholder, true)
+  end
+
+  @doc """
+  Check if blurhash generation is enabled.
+
+  Blurhash requires the `:image` library to be available. Even when enabled
+  in config, this returns `false` if the library is not loaded.
+
+  ## Configuration
+
+      config :phx_media_library,
+        responsive_images: [
+          enabled: true,
+          blurhash: true   # enable blurhash generation
+        ]
+
+  """
+  def blurhash_enabled? do
+    Keyword.get(responsive_images_config(), :blurhash, false) and
+      Code.ensure_loaded?(Image)
+  end
+
+  @doc """
+  Return the global HMAC secret key used for signing local-disk URLs.
+
+  This can be overridden per-disk via the `:secret_key_base` key in the disk
+  config. Returns `nil` when not configured.
+
+  ## Configuration
+
+      config :phx_media_library, secret_key_base: "long-random-secret"
+
+  """
+  def secret_key_base do
+    Application.get_env(:phx_media_library, :secret_key_base)
+  end
+
+  @doc """
+  Return the global base URL where `PhxMediaLibrary.Plug.MediaDownload` is
+  mounted.
+
+  This can be overridden per-disk via the `:download_base_url` key in the
+  disk config. Returns `nil` when not configured.
+
+  ## Configuration
+
+      config :phx_media_library, download_base_url: "/media"
+
+  """
+  def download_base_url do
+    Application.get_env(:phx_media_library, :download_base_url)
   end
 
   # Default disk configuration

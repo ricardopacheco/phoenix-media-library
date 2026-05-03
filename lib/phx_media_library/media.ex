@@ -86,10 +86,67 @@ defmodule PhxMediaLibrary.Media do
 
   @doc """
   Get the URL for this media item.
+
+  Pass `opts` to forward adapter-specific options such as `signed: true`,
+  `download: true`, or `cache_bust: true`. See `PhxMediaLibrary.UrlGenerator`
+  for the full list.
   """
-  @spec url(t() | MediaItem.t(), atom() | nil) :: String.t()
-  def url(media, conversion \\ nil) do
-    UrlGenerator.url(media, conversion)
+  @spec url(t() | MediaItem.t(), atom() | nil, keyword()) :: String.t()
+  def url(media, conversion \\ nil, opts \\ []) do
+    UrlGenerator.url(media, conversion, opts)
+  end
+
+  @doc """
+  Get a CDN-friendly URL with a cache-busting fingerprint query parameter.
+
+  Appends `?v={checksum[0..7]}` when the media item has a stored checksum,
+  so CDN edges serve a fresh object whenever the file is replaced. Falls back
+  to a plain URL when no checksum is available.
+
+  Equivalent to `url(media, conversion, cache_bust: true)`.
+
+  ## Examples
+
+      iex> Media.cdn_url(media)
+      "/uploads/images/1/uuid/photo.jpg?v=a1b2c3d4"
+
+  """
+  @spec cdn_url(t() | MediaItem.t(), atom() | nil) :: String.t()
+  def cdn_url(media, conversion \\ nil) do
+    UrlGenerator.cdn_url(media, conversion)
+  end
+
+  @doc """
+  Get a download URL that triggers a `Content-Disposition: attachment` header.
+
+  For **S3** storage this generates a presigned GET URL with the
+  `response-content-disposition` query parameter. For **local disk** storage
+  the URL routes through `PhxMediaLibrary.Plug.MediaDownload`.
+
+  Equivalent to `url(media, conversion, download: true)`.
+  """
+  @spec download_url(t() | MediaItem.t(), atom() | nil, keyword()) :: String.t()
+  def download_url(media, conversion \\ nil, opts \\ []) do
+    UrlGenerator.download_url(media, conversion, opts)
+  end
+
+  @doc """
+  Get a signed, time-limited URL for a media item.
+
+  For **S3** this is an AWS Signature V4 presigned GET URL. For **local disk**
+  storage this is an HMAC-signed URL verified by
+  `PhxMediaLibrary.Plug.MediaDownload`.
+
+  Equivalent to `url(media, conversion, signed: true)`.
+
+  ## Options
+
+  - `:expires_in` — seconds until the URL expires (default: `3600`).
+  - `:download` — also force `Content-Disposition: attachment`.
+  """
+  @spec signed_url(t() | MediaItem.t(), atom() | nil, keyword()) :: String.t()
+  def signed_url(media, conversion \\ nil, opts \\ []) do
+    UrlGenerator.signed_url(media, conversion, opts)
   end
 
   @doc """
@@ -106,6 +163,30 @@ defmodule PhxMediaLibrary.Media do
   @spec placeholder(t() | MediaItem.t(), atom() | nil) :: String.t() | nil
   def placeholder(media, conversion \\ nil) do
     ResponsiveImages.placeholder(media, conversion)
+  end
+
+  @doc """
+  Get the BlurHash string for a media item, or `nil` if not generated.
+
+  Blurhash must be enabled in config and the `:image` library must be
+  available. The hash is stored in `media.responsive_images["blurhash"]`
+  after upload.
+
+  Use the `<PhxMediaLibrary.Components.blurhash>` component to render the
+  decoded placeholder client-side.
+
+  ## Examples
+
+      iex> Media.blurhash(media)
+      "LKO2?V%2Tw=w]~RBVZRi};RPxuwH"
+
+      iex> Media.blurhash(media_without_hash)
+      nil
+
+  """
+  @spec blurhash(t() | MediaItem.t()) :: String.t() | nil
+  def blurhash(%{responsive_images: responsive}) do
+    get_in(responsive || %{}, ["blurhash"])
   end
 
   @doc """
@@ -207,13 +288,22 @@ defmodule PhxMediaLibrary.Media do
       StorageWrapper.delete(storage, conversion_path)
     end)
 
-    # Delete responsive images
-    media.responsive_images
-    |> Map.values()
-    |> List.flatten()
-    |> Enum.each(fn
-      %{"path" => path} -> StorageWrapper.delete(storage, path)
-      _ -> :ok
+    # Delete responsive image variants and poster frames.
+    # Values may be:
+    #   - %{"variants" => [...], "placeholder" => ...}  (responsive images)
+    #   - %{"path" => "...", "url" => "..."}             (poster frame)
+    Enum.each(media.responsive_images, fn
+      {_key, %{"variants" => variants}} when is_list(variants) ->
+        Enum.each(variants, fn
+          %{"path" => path} when is_binary(path) -> StorageWrapper.delete(storage, path)
+          _ -> :ok
+        end)
+
+      {_key, %{"path" => path}} when is_binary(path) ->
+        StorageWrapper.delete(storage, path)
+
+      _ ->
+        :ok
     end)
 
     :ok

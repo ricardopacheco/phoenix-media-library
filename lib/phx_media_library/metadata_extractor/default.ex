@@ -1,14 +1,32 @@
 defmodule PhxMediaLibrary.MetadataExtractor.Default do
   @moduledoc """
-  Default metadata extractor using the `Image` library for images.
+  Default metadata extractor using the `Image` library for images and the
+  configured `PhxMediaLibrary.VideoProcessor` for videos.
 
   Extracts dimensions, format, alpha channel presence, and EXIF data from
-  images when the `:image` library (libvips) is available. For audio and
-  video files, extracts basic format information from the MIME type.
+  images when the `:image` library (libvips) is available. For videos, it
+  delegates to `Config.video_processor/0` (defaults to
+  `PhxMediaLibrary.VideoProcessor.FFmpeg` when `ffmpeg`/`ffprobe` are on
+  `$PATH`, otherwise `PhxMediaLibrary.VideoProcessor.Null`). For audio
+  files, only basic MIME-derived information is extracted.
 
-  When the `:image` library is not installed, gracefully falls back to
-  extracting only basic format information from the MIME type and file
-  extension — no error is raised.
+  ## Optional dependencies
+
+  Different file types require different external tools to extract rich
+  metadata. When a tool is missing, extraction degrades silently — no error
+  is raised, the upload still succeeds, but the `metadata` map will only
+  contain the basic `"type"` and `"format"` fields:
+
+  | File type | Tool / library | What you lose if missing |
+  | --- | --- | --- |
+  | image | `:image` (libvips) | width, height, has_alpha, EXIF |
+  | video | `ffmpeg` + `ffprobe` on `$PATH` | duration, width, height, codec, fps |
+  | audio | (none implemented) | duration |
+
+  Document this in your deployment notes — operators upgrading from a
+  pre-FFmpeg image will start seeing richer video metadata after installing
+  the binaries, and apps without `ffprobe` will see empty
+  duration/dimensions/codec fields on every video upload.
 
   ## Extracted Fields
 
@@ -20,9 +38,21 @@ defmodule PhxMediaLibrary.MetadataExtractor.Default do
   - `"has_alpha"` — boolean, whether the image has an alpha channel
   - `"exif"` — map of EXIF data (when present in the file)
 
-  ### Audio / Video
+  ### Videos (requires FFmpeg)
 
-  - `"format"` — format derived from MIME subtype (e.g. `"mp4"`, `"mp3"`)
+  - `"duration"` — duration in seconds (float)
+  - `"width"` — width in pixels
+  - `"height"` — height in pixels
+  - `"codec"` — video codec name (e.g. `"h264"`, `"vp9"`)
+  - `"fps"` — frame rate (float)
+
+  Without FFmpeg, only `"format"` and `"type"` are populated.
+
+  ### Audio
+
+  - `"format"` — format derived from MIME subtype (e.g. `"mp3"`, `"flac"`).
+    Audio duration extraction is not currently implemented — implement a
+    custom `MetadataExtractor` if you need it.
 
   ### All files
 
@@ -133,20 +163,25 @@ defmodule PhxMediaLibrary.MetadataExtractor.Default do
   end
 
   # ---------------------------------------------------------------------------
-  # Video extraction
-  # ---------------------------------------------------------------------------
+  # Video extraction — delegates to the configured VideoProcessor
+  # (PhxMediaLibrary.VideoProcessor.FFmpeg when ffprobe/ffmpeg are on $PATH,
+  # PhxMediaLibrary.VideoProcessor.Null otherwise).
 
-  # Video metadata extraction beyond format requires external tools
-  # (ffprobe, etc.) which are out of scope for the default extractor.
-  # Users needing video duration/dimensions should implement a custom
-  # extractor using ffprobe or a similar tool.
-  defp extract_video(_file_path, base), do: base
+  defp extract_video(file_path, base) do
+    processor = PhxMediaLibrary.Config.video_processor()
+
+    case processor.extract_metadata(file_path) do
+      {:ok, video_meta} -> Map.merge(base, video_meta)
+      {:error, _reason} -> base
+    end
+  end
 
   # ---------------------------------------------------------------------------
   # Audio extraction
   # ---------------------------------------------------------------------------
 
-  # Same as video — duration extraction requires ffprobe or similar.
+  # Duration extraction for audio requires ffprobe or similar.
+  # Users needing audio duration should implement a custom extractor.
   defp extract_audio(_file_path, base), do: base
 
   # ---------------------------------------------------------------------------

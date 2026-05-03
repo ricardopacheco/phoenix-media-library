@@ -64,6 +64,48 @@ defmodule PhxMediaLibrary.ModelRegistry do
   end
 
   @doc """
+  Returns every module that uses `PhxMediaLibrary.HasMedia`.
+
+  Resolution strategy mirrors `find_model_module/1`:
+
+  1. If `:model_registry` is configured, return **only** its values
+     (deterministic, no scan).
+  2. Otherwise, scan `:code.all_loaded()` for modules that export
+     `__media_type__/0`.
+
+  Used by `mix phx_media_library.doctor` and `mix phx_media_library.stats`
+  to walk every JSONB-storing schema.
+
+  ## Examples
+
+      # With explicit config
+      iex> Application.put_env(:phx_media_library, :model_registry, %{
+      ...>   "posts" => MyApp.Post
+      ...> })
+      iex> PhxMediaLibrary.ModelRegistry.all_models()
+      [MyApp.Post]
+
+      # Without config (scan)
+      iex> PhxMediaLibrary.ModelRegistry.all_models()
+      [MyApp.Post, MyApp.User]
+
+  """
+  @spec all_models() :: [module()]
+  def all_models do
+    case Application.get_env(:phx_media_library, :model_registry, %{}) do
+      registry when map_size(registry) > 0 ->
+        registry |> Map.values() |> Enum.uniq()
+
+      _ ->
+        :code.all_loaded()
+        |> Enum.flat_map(fn {module, _path} ->
+          if function_exported?(module, :__media_type__, 0), do: [module], else: []
+        end)
+        |> Enum.sort()
+    end
+  end
+
+  @doc """
   Returns the conversions defined on `module` for the given `collection_name`.
 
   Tries `get_media_conversions/1` first (which filters by collection), then

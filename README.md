@@ -158,6 +158,28 @@ mix ecto.migrate
 > **Note:** The `:image` dependency is **optional**. PhxMediaLibrary works for
 > file storage without it. Image conversions require `:image` to be installed.
 
+### System dependencies for video metadata
+
+Video uploads work out of the box, but rich metadata (duration, dimensions,
+codec, fps) and automatic poster-frame generation require **FFmpeg**:
+
+```bash
+# Debian/Ubuntu
+apt-get install ffmpeg
+
+# macOS
+brew install ffmpeg
+
+# Alpine (Docker)
+apk add --no-cache ffmpeg
+```
+
+The library checks for `ffprobe` and `ffmpeg` on `$PATH` at startup and
+selects `PhxMediaLibrary.VideoProcessor.FFmpeg` automatically when both are
+present. Without them, `PhxMediaLibrary.VideoProcessor.Null` is used and
+video uploads succeed with empty `duration`/`width`/`height`/`codec`/`fps`
+fields and no poster frame.
+
 ## Guides
 
 Detailed documentation is organized into focused guides:

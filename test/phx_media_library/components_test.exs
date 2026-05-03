@@ -157,4 +157,83 @@ defmodule PhxMediaLibrary.ComponentsTest do
       assert attrs[:icon].opts[:default] == "hero-arrow-up-tray"
     end
   end
+
+  # ---------------------------------------------------------------------------
+  # Render tests — exercise the JSONB-aware components introduced in Wave 2 / 3
+  # ---------------------------------------------------------------------------
+
+  describe "blurhash/1 (Wave 3) — renders against a MediaItem struct" do
+    import Phoenix.LiveViewTest
+
+    test "renders the canvas keyed by media.uuid when a hash is present" do
+      media = %PhxMediaLibrary.MediaItem{
+        uuid: "abc-123",
+        responsive_images: %{"blurhash" => "LKO2?V%2Tw=w]~RBVZRi};RPxuwH"}
+      }
+
+      html = render_component(&Components.blurhash/1, media: media)
+
+      assert html =~ ~s|id="blurhash-abc-123"|
+      assert html =~ ~s|data-hash="LKO2?V%2Tw=w]~RBVZRi};RPxuwH"|
+    end
+
+    test "renders nothing when no blurhash is stored" do
+      media = %PhxMediaLibrary.MediaItem{uuid: "abc-123", responsive_images: %{}}
+
+      html = render_component(&Components.blurhash/1, media: media)
+
+      refute html =~ "blurhash-abc-123"
+      refute html =~ "data-hash"
+    end
+
+    test "tolerates a nil responsive_images map" do
+      media = %PhxMediaLibrary.MediaItem{uuid: "abc-123", responsive_images: nil}
+
+      html = render_component(&Components.blurhash/1, media: media)
+
+      refute html =~ "data-hash"
+    end
+  end
+
+  describe "media_video/1 (Wave 2) — renders against a MediaItem struct" do
+    import Phoenix.LiveViewTest
+
+    test "renders a <video> tag and uses the poster URL from responsive_images" do
+      media = %PhxMediaLibrary.MediaItem{
+        uuid: "vid-1",
+        file_name: "clip.mp4",
+        mime_type: "video/mp4",
+        disk: "memory",
+        responsive_images: %{
+          "poster" => %{"path" => "videos/vid-1/poster.jpg", "url" => "/uploads/poster.jpg"}
+        },
+        metadata: %{"duration" => 12.5, "width" => 1920, "height" => 1080, "codec" => "h264"}
+      }
+
+      html = render_component(&Components.media_video/1, media: media)
+
+      assert html =~ ~s|<video|
+      assert html =~ ~s|poster="/uploads/poster.jpg"|
+      assert html =~ ~s|type="video/mp4"|
+      # Metadata strip
+      assert html =~ "1920×1080"
+      assert html =~ "h264"
+    end
+
+    test "omits the metadata strip when metadata is empty" do
+      media = %PhxMediaLibrary.MediaItem{
+        uuid: "vid-2",
+        file_name: "clip.mp4",
+        mime_type: "video/mp4",
+        disk: "memory",
+        responsive_images: %{},
+        metadata: %{}
+      }
+
+      html = render_component(&Components.media_video/1, media: media)
+
+      assert html =~ ~s|<video|
+      refute html =~ "border-t border-zinc-800"
+    end
+  end
 end

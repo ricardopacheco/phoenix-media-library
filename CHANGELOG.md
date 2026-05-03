@@ -5,7 +5,263 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+> ## ⚠️ Fork notice
+>
+> This is a fork of [mike-kostov/phx_media_library](https://github.com/mike-kostov/phx_media_library).
+> Diverged from upstream `v0.5.1` (commit `526e22a`) to replace the polymorphic
+> `media` table with **embedded JSONB columns on each parent schema** for
+> better performance and a simpler operational model.
+>
+> ### Storage model in this fork
+>
+> - Each parent schema declares `field :media_data, :map` (or a custom column
+>   via `use HasMedia, column: :foo`). All media items for a parent live in
+>   that single JSONB document, keyed by collection name → array of items.
+> - **`PhxMediaLibrary.MediaItem`** is the persistence struct stored inside
+>   the JSONB array. Fields: `:uuid`, `:name`, `:file_name`, `:mime_type`,
+>   `:disk`, `:size`, `:checksum`, `:order`, `:custom_properties`,
+>   `:metadata`, `:generated_conversions`, `:responsive_images`,
+>   `:inserted_at`. Plus virtual `:collection_name`, `:owner_type`,
+>   `:owner_id` populated at read time (the parent's table name and id are
+>   the source of truth — never stored in JSONB).
+> - **`PhxMediaLibrary.MediaData`** holds pure functions over the JSONB map:
+>   `get_collection/3`, `put_item/3`, `update_item/4`, `remove_item/4`,
+>   `reorder/3`, `all_items/2`, `count/2`. They take and return plain maps.
+> - **`PhxMediaLibrary.Helpers.update_media_data/2`** applies an updater
+>   function to a parent model's JSONB column and persists via Ecto.
+> - **`PhxMediaLibrary.Media`** is a plain struct (not an Ecto schema) with
+>   the same fields as `MediaItem`. Used as a "view" type. Convertible via
+>   `Media.from_media_item/1` and `Media.to_media_item/1`.
+> - **`MediaAdder`** writes via `MediaData.put_item/3` +
+>   `Helpers.update_media_data/2` instead of `Repo.insert(%Media{})`.
+> - Path generators accept any struct/map with the required fields (Media,
+>   MediaItem, or plain map) — typespecs use `map()` rather than `Media.t()`.
+>
+> ### Upstream features that are NOT ported
+>
+> - **Soft deletes.** `delete/1`/`restore/1`/`trashed?/1`/`purge_trashed/2`,
+>   `exclude_trashed/1`, `only_trashed/1`, `mix phx_media_library.purge_deleted`
+>   are not available. Hard delete only.
+> - **Polymorphic `has_many :media` association** injected by `has_media()`.
+>   Without a media table, there is nothing to associate. Use
+>   `PhxMediaLibrary.get_media/2` to fetch items from JSONB.
+> - **`Media.changeset`, `Media.permanently_delete/1`, `Media.for_model/2`.**
+>   Use `Helpers.update_media_data/2` + `MediaData.*` to mutate the JSONB.
+> - **The `add_deleted_at_to_media` migration** and any reference to a
+>   `media` table.
+>
+> The CHANGELOG below preserves upstream's release history verbatim. Where
+> a feature in those entries is in the not-ported list above, assume the
+> upstream description does not apply to this fork. Fork-specific changes
+> are tracked under [Unreleased — Fork](#unreleased--fork) below.
+
+## [Unreleased — Fork]
+
+Fork-specific changes since branching from upstream `v0.5.1`. Track this
+section for what actually shipped in this repository.
+
+### v0.6.0 upstream sync (5 commits)
+
+Cherry-picked from upstream `v0.6.0` and adapted to JSONB:
+
+- **Wave 1 (`71e6466`)** — `PathGenerator` becomes a behaviour with
+  delegating functions, plus built-in `Default` / `Flat` / `DateBased`
+  generators. Optional 3-arity callbacks for `path_context`. New
+  `Config.path_generator/0`. `mix doctor` and `mix stats` were initially
+  stubbed (see the post-sync section).
+- **Docker test infra (`57c3ec5`)** — Postgres service for the test
+  database via `docker compose up -d postgres`.
+- **Wave 2 (`ec5fc62`)** — FFmpeg video processor (`Config.video_processor/0`,
+  `VideoProcessor.FFmpeg`/`Null`), `PathGenerator.Tenant` for tenant-scoped
+  paths via `path_context`, multi-tenant guide, automatic poster-frame
+  extraction for video uploads. The `responsive_images` JSONB shape was
+  extended to also store posters as
+  `%{"poster" => %{"path" => ..., "url" => ...}}`.
+- **S3 multipart fix (`d6d7f3f`)** — rechunk streaming uploads to 5 MiB
+  parts to satisfy S3's multipart minimum.
+- **Wave 3 (`670dd53`)** — Blurhash placeholders, CDN URLs with cache-bust
+  fingerprint, download URLs (`Content-Disposition: attachment`), signed
+  URLs (S3 presigned + local HMAC), `Plug.MediaDownload`. New top-level
+  API: `cdn_url/2`, `download_url/3`, `signed_url/3`, `blurhash/1`.
+
+### Post-sync
+
+- **`mix phx_media_library.doctor` and `mix phx_media_library.stats`
+  reimplemented for JSONB** (`e6d2bfa`):
+  - New `ModelRegistry.all_models/0` with deterministic discovery: explicit
+    `:model_registry` config takes precedence; otherwise scan loaded modules
+    that export `__media_type__/0`.
+  - `mix stats` aggregates counts and sizes at the database level using
+    PostgreSQL `jsonb_each` + `jsonb_array_elements` (one query per schema).
+  - `mix doctor` walks every HasMedia schema's JSONB and verifies file
+    existence + conversion files. The orphan and soft-delete checks from
+    upstream were dropped — they don't apply to embedded JSONB.
+- **`Components.ex` audit** (`dd0e229`) — fixed `blurhash/1` using
+  `@media.id` (KeyError on `MediaItem`); now uses `@media.uuid`. Added
+  `render_component/2` tests for `blurhash/1` and `media_video/1` against
+  `MediaItem` structs.
+- **`Storage.S3` to 100% coverage with real RustFS** (`7dd7012`) — added a
+  RustFS service to `docker-compose.yml` and wrote 26 tests against real
+  S3-compatible storage. Surfaced a **critical bug** in upstream's
+  `rechunk/2` (introduced by `a9cf1e4`): `Stream.transform/4`'s `last_fun`
+  emissions are silently dropped in Elixir 1.19, causing the final partial
+  part of every multipart upload to be lost. Fixed via a sentinel-based
+  `Stream.transform/3` rewrite that flushes the leftover buffer in-band.
+
+## [0.6.0] - 2026-03-31
+
+### Added
+
+#### 4.1 — BlurHash Generation
+
+- **`PhxMediaLibrary.Blurhash`** — new module that generates BlurHash strings
+  from image files. Uses the `:image` library (libvips) to resize images to a
+  small working size and applies a pure-Elixir DCT encoder (base-83 alphabet,
+  reference: blurha.sh). Optional — silently disabled when `:image` is not
+  installed.
+
+- **`Config.blurhash_enabled?/0`** — returns `true` when
+  `responsive_images: [blurhash: true]` is configured **and** the `:image`
+  library is available.
+
+- **Automatic blurhash generation** — `MediaAdder` now generates a BlurHash
+  string for every image upload when `blurhash_enabled?/0` is true. The hash
+  is stored in `media.responsive_images["blurhash"]`.
+
+- **`Media.blurhash/1`** and **`PhxMediaLibrary.blurhash/1`** — convenience
+  helpers that return `media.responsive_images["blurhash"]` or `nil`.
+
+- **`<PhxMediaLibrary.Components.blurhash>`** — new function component that
+  renders the hash as a `<canvas>` element. A colocated JavaScript hook
+  (no npm dependency) decodes the hash client-side and paints the blurred
+  preview, providing smooth progressive loading before the real image arrives.
+
+#### 4.4a — CDN URL Generation with Cache-Busting
+
+- **`url/3` `:cache_bust` option** — pass `cache_bust: true` to any
+  URL-generating call to append `?v={checksum[0..7]}` to the URL. The
+  fingerprint comes from the media item's stored SHA-256 checksum, so CDN
+  edges automatically serve a fresh copy whenever a file is replaced. Falls
+  back to a plain URL when no checksum is stored.
+
+- **`PhxMediaLibrary.cdn_url/2`**, **`Media.cdn_url/2`**, and
+  **`UrlGenerator.cdn_url/2`** — convenience shorthand for
+  `url(media, conversion, cache_bust: true)`.
+
+#### 4.4b — Content-Disposition Download Links
+
+- **`url/3` `:download` option** — pass `download: true` to generate a URL
+  that triggers `Content-Disposition: attachment` in the browser.
+
+  - **S3**: generates a presigned GET URL with the
+    `response-content-disposition` query parameter included in the AWS
+    Signature V4 canonical request (so the signature is valid).
+  - **Local disk**: routes through `PhxMediaLibrary.Plug.MediaDownload`
+    which serves the file with the proper response header.
+
+- **`PhxMediaLibrary.download_url/3`**, **`Media.download_url/3`**, and
+  **`UrlGenerator.download_url/3`** — shorthand for
+  `url(media, conversion, download: true)`.
+
+- **`PhxMediaLibrary.Plug.MediaDownload`** — new Plug for local-disk
+  storage. Mount it in the Phoenix router at the path configured as
+  `download_base_url`. Supports unsigned download links and HMAC-signed
+  expiring URLs (see 4.4c below). Includes path-traversal protection.
+
+#### 4.4c — Signed / Expiring URLs
+
+- **`url/3` `:signed` and `:expires_in` options** — pass `signed: true` to
+  generate a time-limited URL. `:expires_in` controls the expiry window in
+  seconds (default: `3600`).
+
+  - **S3**: AWS Signature V4 presigned GET URL (already supported internally;
+    now cleanly exposed through the unified `url/3` API).
+  - **Local disk**: HMAC-SHA256–signed URL verified by
+    `PhxMediaLibrary.Plug.MediaDownload`. Requires `secret_key_base` and
+    `download_base_url` in the disk config.
+
+- **`PhxMediaLibrary.signed_url/3`**, **`Media.signed_url/3`**, and
+  **`UrlGenerator.signed_url/3`** — shorthand for
+  `url(media, conversion, signed: true)`.
+
+- **`PhxMediaLibrary.SignedUrl`** — new module implementing HMAC-SHA256
+  signing and constant-time verification for local-disk URLs.
+
+- **`Config.secret_key_base/0`** and **`Config.download_base_url/0`** —
+  new config helpers for the global signing secret and download plug mount
+  path.
+
+#### 4.3 — Multi-Tenant Support
+
+- **`PhxMediaLibrary.PathGenerator.Tenant`** — new built-in path generator
+  that prepends a `tenant_id` segment to every storage path:
+  `{tenant_id}/{mediable_type}/{mediable_id}/{uuid}/{filename}`. The
+  `tenant_id` is read from the optional `path_context` map (atom or string
+  key); falls back to `"shared"` when absent. Integer IDs are coerced to
+  strings automatically.
+
+- **Multi-Tenant guide** (`guides/multi-tenant.md`) — covers natural
+  per-model scoping, configuring `PathGenerator.Tenant`, passing
+  `path_context` through upload flows, cross-model queries, per-tenant
+  storage backends, custom generators, and migrating existing files.
+
+- **`Config.path_generator/0` doc** updated to list `Tenant` alongside
+  `Default`, `Flat`, and `DateBased`.
+
+#### 4.2 — Optional FFmpeg Video Processor
+
+- **`PhxMediaLibrary.VideoProcessor` behaviour** — new pluggable behaviour
+  for video processing adapters with three callbacks: `available?/0`,
+  `extract_metadata/1`, and `extract_poster/2`.
+
+- **`PhxMediaLibrary.VideoProcessor.FFmpeg`** — implementation using
+  `ffprobe` (metadata) and `ffmpeg` (poster frames). Selected automatically
+  when both executables are found on `$PATH`. No configuration required.
+  Extracts: `duration` (float seconds), `width`, `height`, `codec`, `fps`,
+  `audio_codec`, `bit_rate`.
+
+- **`PhxMediaLibrary.VideoProcessor.Null`** — no-op fallback used when
+  FFmpeg is not installed. Uploads still succeed; metadata and poster
+  generation are simply skipped without errors.
+
+- **`Config.video_processor/0`** — returns the active video processor
+  module; auto-detects FFmpeg at startup; configurable via
+  `config :phx_media_library, video_processor: …`
+
+- **Automatic video metadata extraction** — `MetadataExtractor.Default`
+  now delegates video file extraction to the configured `VideoProcessor`,
+  populating `media.metadata` with duration, dimensions, codec, and fps on
+  every video upload when FFmpeg is available.
+
+- **Poster frame generation** — `MediaAdder` extracts a JPEG poster frame
+  at 10% into the video (capped at 5 s) immediately after upload and stores
+  it alongside the video file. The URL is recorded in
+  `media.responsive_images["poster"]["url"]` for use in templates.
+
+- **`<.media_video>` component** — new `PhxMediaLibrary.Components`
+  function component that renders a styled `<video>` player with automatic
+  poster frame, preload, and a metadata strip (duration, dimensions, codec,
+  fps). Accepts `controls`, `autoplay`, `muted`, `loop`, and `class`
+  attributes.
+
+### Fixed
+
+- **`delete_files/1` crash on media with responsive images** — the
+  responsive images delete loop incorrectly pattern-matched
+  `%{"path" => path}` directly on top-level map values, which are actually
+  `%{"variants" => [...], "placeholder" => ...}` structs. The loop now
+  uses multi-clause `Enum.each` to correctly handle both responsive image
+  variant lists and poster frame entries (`%{"path" => ..., "url" => ...}`).
+
+- **`data-confirm` interpolation in gallery_app video delete button** —
+  the confirmation string used unescaped curly quotes around the filename,
+  causing a HEEx compile warning. Now uses proper `\"` escaping.
+
+### Changed
+
+- **Version bumped to `0.6.0`** — covers the full Milestone 4 feature set
+  (4.2 FFmpeg video processing, 4.3 multi-tenant path generator, 4.4/4.5/4.6
+  tooling and path generators delivered in Wave 1).
 
 ## [0.5.1] - 2026-03-01
 

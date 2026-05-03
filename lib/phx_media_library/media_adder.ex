@@ -21,7 +21,8 @@ defmodule PhxMediaLibrary.MediaAdder do
     PathGenerator,
     ResponsiveImages,
     StorageWrapper,
-    Telemetry
+    Telemetry,
+    UrlGenerator
   }
 
   defstruct [
@@ -412,6 +413,25 @@ defmodule PhxMediaLibrary.MediaAdder do
           media_item
         end
 
+      # Generate blurhash placeholder when enabled and Image is available.
+      # Runs after responsive images so the same open/resize work could
+      # theoretically be shared; kept separate for clarity.
+      media_item =
+        if image?(file_info.mime_type) and Config.blurhash_enabled?() do
+          maybe_generate_blurhash(updated_model, collection_name, media_item, file_info.path)
+        else
+          media_item
+        end
+
+      # Generate poster frame for videos when FFmpeg is available.
+      # Must happen before temp file cleanup so the source file is still present.
+      media_item =
+        if video?(file_info.mime_type) do
+          maybe_generate_poster(updated_model, collection_name, media_item, file_info.path)
+        else
+          media_item
+        end
+
       # Cleanup temp file if needed
       if file_info.temp, do: File.rm(file_info.path)
 
@@ -461,6 +481,73 @@ defmodule PhxMediaLibrary.MediaAdder do
     String.starts_with?(mime_type, "image/")
   end
 
+  defp video?(mime_type) do
+    String.starts_with?(mime_type, "video/")
+  end
+
+  defp maybe_generate_poster(model, collection_name, media_item, file_path) do
+    processor = Config.video_processor()
+
+    if processor.available?() do
+      duration = media_item.metadata |> Map.get("duration") |> coerce_float()
+      offset = min(duration * 0.1, 5.0) |> max(0.0)
+
+      case processor.extract_poster(file_path, offset) do
+        {:ok, jpeg_data} -> store_poster(model, collection_name, media_item, jpeg_data)
+        {:error, _} -> media_item
+      end
+    else
+      media_item
+    end
+  end
+
+  defp store_poster(model, collection_name, media_item, jpeg_data) do
+    storage = Config.storage_adapter(media_item.disk)
+    poster_path = poster_storage_path(media_item)
+
+    case StorageWrapper.put(storage, poster_path, jpeg_data) do
+      :ok ->
+        poster_url = UrlGenerator.url_for_path(media_item, poster_path)
+
+        updated_responsive =
+          Map.put(media_item.responsive_images || %{}, "poster", %{
+            "path" => poster_path,
+            "url" => poster_url
+          })
+
+        updated_item = %{media_item | responsive_images: updated_responsive}
+
+        Helpers.update_media_data(model, fn data ->
+          MediaData.update_item(data, collection_name, media_item.uuid, fn _item ->
+            updated_item
+          end)
+        end)
+
+        updated_item
+
+      {:error, _} ->
+        media_item
+    end
+  end
+
+  defp poster_storage_path(media_item) do
+    base_dir = Path.dirname(PathGenerator.relative_path(media_item, nil))
+    Path.join(base_dir, "poster.jpg")
+  end
+
+  defp coerce_float(nil), do: 0.0
+  defp coerce_float(v) when is_float(v), do: v
+  defp coerce_float(v) when is_integer(v), do: v * 1.0
+
+  defp coerce_float(v) when is_binary(v) do
+    case Float.parse(v) do
+      {f, _} -> f
+      :error -> 0.0
+    end
+  end
+
+  defp coerce_float(_), do: 0.0
+
   defp generate_responsive_images(model, collection_name, media_item) do
     case ResponsiveImages.generate(media_item, nil) do
       {:ok, responsive_data} ->
@@ -476,6 +563,29 @@ defmodule PhxMediaLibrary.MediaAdder do
 
       {:error, _reason} ->
         # Log error but don't fail the upload
+        media_item
+    end
+  end
+
+  defp maybe_generate_blurhash(model, collection_name, media_item, file_path) do
+    case PhxMediaLibrary.Blurhash.generate(file_path) do
+      {:ok, hash} ->
+        updated_responsive =
+          Map.put(media_item.responsive_images || %{}, "blurhash", hash)
+
+        updated_item = %{media_item | responsive_images: updated_responsive}
+
+        Helpers.update_media_data(model, fn data ->
+          MediaData.update_item(data, collection_name, media_item.uuid, fn _item ->
+            updated_item
+          end)
+        end)
+
+        updated_item
+
+      {:error, _} ->
+        # Blurhash generation failed (e.g. unsupported format) — don't
+        # fail the upload, just skip the placeholder.
         media_item
     end
   end
@@ -589,8 +699,14 @@ defmodule PhxMediaLibrary.MediaAdder do
     headers
     |> Enum.find(fn {k, _} -> String.downcase(k) == "content-type" end)
     |> case do
-      {_, value} -> value |> String.split(";") |> List.first() |> String.trim()
-      _ -> nil
+      {_, value} when is_binary(value) ->
+        value |> String.split(";") |> List.first() |> String.trim()
+
+      {_, [value | _]} when is_binary(value) ->
+        value |> String.split(";") |> List.first() |> String.trim()
+
+      _ ->
+        nil
     end
   end
 

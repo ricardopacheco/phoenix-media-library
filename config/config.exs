@@ -33,3 +33,8 @@ config :phx_media_library,
   ]
 
 config :logger, level: :warning
+
+# ExAws ships with Hackney as the default HTTP client, but this library
+# already depends on Req. Route ExAws through Req so we don't need a second
+# HTTP stack just for S3.
+config :ex_aws, http_client: ExAws.Request.Req
