@@ -13,6 +13,7 @@ defmodule PhxMediaLibrary.MediaAdder do
     Collection,
     Config,
     Conversions,
+    Downloader,
     FileName,
     Helpers,
     Media,
@@ -120,7 +121,7 @@ defmodule PhxMediaLibrary.MediaAdder do
 
     Telemetry.span([:phx_media_library, :add], telemetry_metadata, fn ->
       result =
-        with {:ok, file_info} <- resolve_source(adder),
+        with {:ok, file_info} <- resolve_source(adder, collection_name),
              {:ok, file_info, header} <- read_and_detect_mime(file_info),
              {:ok, _validated} <- validate_collection(adder, collection_name, file_info),
              :ok <- maybe_verify_content_type(adder, collection_name, file_info, header),
@@ -144,13 +145,16 @@ defmodule PhxMediaLibrary.MediaAdder do
   # ---------------------------------------------------------------------------
   # Source resolution  # ---------------------------------------------------------------------------
 
-  defp resolve_source(%__MODULE__{source: source, custom_filename: custom_filename}) do
+  defp resolve_source(
+         %__MODULE__{source: source, custom_filename: custom_filename} = adder,
+         collection_name
+       ) do
     case source do
       {:url, url, url_opts} ->
-        download_from_url(url, custom_filename, url_opts)
+        download_from_url(url, adder, collection_name, url_opts)
 
       {:url, url} ->
-        download_from_url(url, custom_filename, [])
+        download_from_url(url, adder, collection_name, [])
 
       path when is_binary(path) ->
         resolve_file_path(path, custom_filename)
@@ -168,20 +172,34 @@ defmodule PhxMediaLibrary.MediaAdder do
     end
   end
 
-  defp download_from_url(url, custom_filename, url_opts) do
-    with :ok <- validate_url(url) do
-      req_opts = build_req_opts(url_opts)
+  # Remote downloads go through PhxMediaLibrary.Downloader: private hosts
+  # refused, streamed to disk, capped by size and time.
+  defp download_from_url(url, adder, collection_name, url_opts) do
+    # Cap the download at the collection's max_size unless the caller set one.
+    url_opts =
+      Keyword.put_new_lazy(url_opts, :max_size, fn ->
+        case Helpers.collection_config(adder.model, collection_name) do
+          %Collection{max_size: max_size} -> max_size
+          _ -> nil
+        end
+      end)
 
-      Telemetry.span(
-        [:phx_media_library, :download],
-        %{url: url},
-        fn -> execute_download(url, custom_filename, req_opts) end
-      )
-    end
+    Telemetry.span(
+      [:phx_media_library, :download],
+      %{url: url},
+      fn -> execute_download(url, adder.custom_filename, url_opts) end
+    )
   end
 
-  defp execute_download(url, custom_filename, req_opts) do
-    result = do_download(url, custom_filename, req_opts)
+  defp execute_download(url, custom_filename, url_opts) do
+    result =
+      case Downloader.download(url, url_opts) do
+        {:ok, info} when is_binary(custom_filename) ->
+          {:ok, %{info | filename: FileName.safe(custom_filename)}}
+
+        other ->
+          other
+      end
 
     stop_metadata =
       case result do
@@ -190,62 +208,6 @@ defmodule PhxMediaLibrary.MediaAdder do
       end
 
     {result, stop_metadata}
-  end
-
-  defp validate_url(url) when is_binary(url) do
-    uri = URI.parse(url)
-
-    cond do
-      uri.scheme not in ["http", "https"] ->
-        {:error, {:invalid_url, :unsupported_scheme, uri.scheme}}
-
-      is_nil(uri.host) or uri.host == "" ->
-        {:error, {:invalid_url, :missing_host}}
-
-      true ->
-        :ok
-    end
-  end
-
-  defp validate_url(_), do: {:error, {:invalid_url, :not_a_string}}
-
-  defp build_req_opts(url_opts) do
-    base = [decode_body: false, redirect: true, max_redirects: 5]
-
-    # Allow custom headers (e.g. for authenticated URLs)
-    headers = Keyword.get(url_opts, :headers, [])
-    timeout = Keyword.get(url_opts, :timeout)
-
-    opts = if headers != [], do: Keyword.put(base, :headers, headers), else: base
-    opts = if timeout, do: Keyword.put(opts, :receive_timeout, timeout), else: opts
-
-    opts
-  end
-
-  defp do_download(url, custom_filename, req_opts) do
-    case Req.get(url, req_opts) do
-      {:ok, %{status: status, body: body, headers: headers}} when status in 200..299 ->
-        filename = FileName.safe(custom_filename || filename_from_url(url, headers))
-        mime_type = get_content_type(headers) || MIME.from_path(filename)
-
-        temp_path = write_temp_file(body, filename)
-
-        {:ok,
-         %{
-           path: temp_path,
-           filename: filename,
-           mime_type: mime_type,
-           size: byte_size(body),
-           temp: true,
-           source_url: url
-         }}
-
-      {:ok, %{status: status}} ->
-        {:error, {:download_failed, status}}
-
-      {:error, reason} ->
-        {:error, {:download_failed, reason}}
-    end
   end
 
   defp resolve_file_path(path, custom_filename) do
@@ -781,52 +743,6 @@ defmodule PhxMediaLibrary.MediaAdder do
     else
       []
     end
-  end
-
-  defp filename_from_url(url, headers) do
-    # Try Content-Disposition first, then fall back to URL path
-    case get_content_disposition_filename(headers) do
-      nil -> url |> URI.parse() |> Map.get(:path, "") |> Path.basename()
-      filename -> filename
-    end
-  end
-
-  defp get_content_disposition_filename(headers) do
-    headers
-    |> Enum.find(fn {k, _} -> String.downcase(k) == "content-disposition" end)
-    |> case do
-      {_, value} ->
-        Regex.run(~r/filename="?([^"]+)"?/, value, capture: :all_but_first)
-        |> case do
-          [filename] -> filename
-          _ -> nil
-        end
-
-      _ ->
-        nil
-    end
-  end
-
-  defp get_content_type(headers) do
-    headers
-    |> Enum.find(fn {k, _} -> String.downcase(k) == "content-type" end)
-    |> case do
-      {_, value} when is_binary(value) ->
-        value |> String.split(";") |> List.first() |> String.trim()
-
-      {_, [value | _]} when is_binary(value) ->
-        value |> String.split(";") |> List.first() |> String.trim()
-
-      _ ->
-        nil
-    end
-  end
-
-  defp write_temp_file(content, filename) do
-    dir = System.tmp_dir!()
-    path = Path.join(dir, "phx_media_#{:erlang.unique_integer([:positive])}_#{filename}")
-    File.write!(path, content)
-    path
   end
 
   defp source_type({:url, _, _}), do: :url

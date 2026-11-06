@@ -86,16 +86,36 @@ defmodule PhxMediaLibrary do
   @doc """
   Add media from a remote URL.
 
+  The file is streamed to a temporary file before processing. Only `http`
+  and `https` URLs are accepted, and hosts on private or loopback networks
+  are refused, including after redirects — see `PhxMediaLibrary.Downloader`.
+
   ## Options
 
-  - `:headers` — custom request headers
-  - `:timeout` — download timeout in milliseconds
+  - `:headers` — custom request headers (e.g. `[{"authorization", "Bearer token"}]`)
+  - `:timeout` — receive timeout between chunks, in milliseconds
+  - `:total_timeout` — limit for the whole download (default 5 minutes)
+  - `:max_size` — maximum size in bytes (defaults to the collection's `max_size`)
+  - `:allow_private_hosts` — allow private/loopback hosts, e.g. an intranet
+  - `:max_redirects` — default `5`
+
+  ## Telemetry
+
+  Downloads emit `[:phx_media_library, :download, :start | :stop | :exception]`
+  events with URL, size, and MIME type metadata.
 
   ## Examples
 
       post
       |> PhxMediaLibrary.add_from_url("https://example.com/image.jpg")
       |> PhxMediaLibrary.to_collection(:images)
+
+      # With authentication
+      post
+      |> PhxMediaLibrary.add_from_url("https://api.example.com/file.pdf",
+        headers: [{"authorization", "Bearer my-token"}]
+      )
+      |> PhxMediaLibrary.to_collection(:documents)
 
   """
   @spec add_from_url(Ecto.Schema.t(), String.t(), keyword()) :: MediaAdder.t()

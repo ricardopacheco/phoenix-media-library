@@ -139,4 +139,57 @@ defmodule PhxMediaLibrary.UploadHardeningTest do
                |> PhxMediaLibrary.to_collection(:unverified, disk: :local)
     end
   end
+
+  describe "remote downloads" do
+    # A public IP literal: no DNS lookup, passes the private-network check.
+    # Requests never leave the process — Req's `plug:` option answers them.
+    @public "http://93.184.215.14"
+
+    defp serving(body, opts \\ []) do
+      plug = fn conn -> Plug.Conn.send_resp(conn, 200, body) end
+      Keyword.put(opts, :req_options, plug: plug)
+    end
+
+    test "are stored, with the source URL recorded", %{post: post} do
+      assert {:ok, media} =
+               post
+               |> PhxMediaLibrary.add_from_url(
+                 @public <> "/files/notes.txt",
+                 serving("remote text")
+               )
+               |> PhxMediaLibrary.to_collection(:documents, disk: :local)
+
+      assert media.file_name == "notes.txt"
+      assert media.size == byte_size("remote text")
+      assert media.custom_properties["source_url"] == @public <> "/files/notes.txt"
+    end
+
+    test "private hosts are refused", %{post: post} do
+      assert {:error, {:invalid_url, :private_address, "169.254.169.254"}} =
+               post
+               |> PhxMediaLibrary.add_from_url("http://169.254.169.254/latest/meta-data")
+               |> PhxMediaLibrary.to_collection(:documents, disk: :local)
+    end
+
+    test "allow_private_hosts: true lets an intranet URL through", %{post: post} do
+      assert {:ok, _media} =
+               post
+               |> PhxMediaLibrary.add_from_url(
+                 "http://10.0.0.5/a.txt",
+                 serving("intranet", allow_private_hosts: true)
+               )
+               |> PhxMediaLibrary.to_collection(:documents, disk: :local)
+    end
+
+    test "the download stops at the collection's max_size", %{post: post} do
+      # :small_files has max_size: 1_000
+      assert {:error, {:file_too_large, _, 1_000}} =
+               post
+               |> PhxMediaLibrary.add_from_url(
+                 @public <> "/big.txt",
+                 serving(String.duplicate("a", 5_000))
+               )
+               |> PhxMediaLibrary.to_collection(:small_files, disk: :local)
+    end
+  end
 end
