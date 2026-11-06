@@ -128,11 +128,6 @@ if Code.ensure_loaded?(Plug.Conn) do
           conn
           |> send_resp(404, "Not Found")
           |> halt()
-
-        {:error, _reason} ->
-          conn
-          |> send_resp(500, "Internal Server Error")
-          |> halt()
       end
     end
 

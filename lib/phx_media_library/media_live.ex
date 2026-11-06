@@ -200,9 +200,6 @@ defmodule PhxMediaLibrary.MediaLive do
 
       {:error, :not_found} ->
         {:noreply, put_flash(socket, :error, "File not found")}
-
-      {:error, reason} ->
-        {:noreply, put_flash(socket, :error, "Delete failed: #{inspect(reason)}")}
     end
   end
 

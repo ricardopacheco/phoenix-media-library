@@ -523,7 +523,7 @@ defmodule PhxMediaLibrary.MediaAdder do
         poster_url = UrlGenerator.url_for_path(media_item, poster_path)
 
         updated_responsive =
-          Map.put(media_item.responsive_images || %{}, "poster", %{
+          Map.put(media_item.responsive_images, "poster", %{
             "path" => poster_path,
             "url" => poster_url
           })
@@ -572,7 +572,7 @@ defmodule PhxMediaLibrary.MediaAdder do
     case PhxMediaLibrary.Blurhash.generate(file_path) do
       {:ok, hash} ->
         updated_responsive =
-          Map.put(media_item.responsive_images || %{}, "blurhash", hash)
+          Map.put(media_item.responsive_images, "blurhash", hash)
 
         updated_item = %{media_item | responsive_images: updated_responsive}
         replace_item(model, collection_name, updated_item)
