@@ -270,6 +270,39 @@ commits. Ported and adapted:
   (`test/phx_media_library/responsive_images_test.exs`).
 - Version bumped to `0.8.1`, mirroring upstream's numbering.
 
+### v0.8.2 upstream sync (1 commit)
+
+Upstream `v0.8.2` (`c5332cf`). Ported:
+
+- **`webp: [max_dimension: n]`** — the served WebP fits inside an `n`px
+  square (never upscaled) and its size is recorded in
+  `custom_properties["webp_width"]`/`["webp_height"]`; responsive variants
+  stop at that size and the largest `srcset` entry is the capped WebP.
+  `Webp.fit_dimensions/2`. The recorded size is the one libvips actually
+  produced (upstream records the computed one).
+- **`width:` on `url/3`** (`PhxMediaLibrary.url/3`, `Media.url/3`,
+  `UrlGenerator.url/3`) — the smallest responsive variant at least that wide,
+  else the widest; media without variants get their regular URL.
+- **`get_first_media_url/3` forwards its options** (other than `:fallback`)
+  to `url/3` — this fork dropped them too, so `cache_bust:` was ignored.
+- **`regenerate_webp` and `PRIORITIES.md` changes** — not ported (the task
+  isn't ported; `PRIORITIES.md` is upstream's roadmap).
+- Version bumped to `0.8.2`, mirroring upstream's numbering.
+
+## [0.8.2] - 2026-09-12
+
+### Added
+- `webp: [max_dimension: n]` fits the served WebP inside an `n`px square
+  (aspect kept, never upscaled) and records `webp_width`/`webp_height` in
+  `custom_properties`. Responsive variants wider than the cap are skipped and
+  the `srcset`'s largest descriptor carries the capped size.
+- `width:` option on `Media.url/3` and `get_first_media_url/3`: returns the
+  smallest responsive variant at least that wide (the widest when none is),
+  so fixed-size slots never download the full file.
+- `get_first_media_url/3` now forwards its options (other than `:fallback`)
+  to `Media.url/3`.
+- `PhxMediaLibrary.Webp.fit_dimensions/2`.
+
 ## [0.8.1] - 2026-08-20
 
 ### Added
