@@ -153,6 +153,12 @@ CSS bundle, add the library's source path to your `assets/css/app.css`:
 
 PhxMediaLibrary supports two styles for defining collections and conversions. You can use either — or mix them.
 
+> **Any primary key type works.** Media lives in the schema's own JSONB
+> column, so there is no foreign key column whose type must match your
+> primary keys: UUID, integer (`bigserial`) and string primary keys all work
+> without configuration. The owner id is used as a string in storage paths,
+> e.g. `posts/42/<uuid>/photo.jpg`.
+
 ### Declarative DSL — nested style (recommended)
 
 Nest `convert` calls inside `collection ... do ... end` blocks so it's

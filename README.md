@@ -95,7 +95,7 @@ end
 
 | Category | What you get |
 |----------|-------------|
-| **Schema integration** | JSONB column per schema, declarative DSL for collections & conversions |
+| **Schema integration** | JSONB column per schema, any primary key type (UUID, integer, string) with no configuration, declarative DSL for collections & conversions |
 | **Collections** | MIME validation, file limits, size limits, single-file mode, fallback URLs |
 | **Image conversions** | Thumbnails, resizes, format conversion, responsive srcset — optional, works without libvips |
 | **Metadata extraction** | Auto-extract dimensions, EXIF, format, type classification; stored in `metadata` JSON field |
