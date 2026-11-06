@@ -43,6 +43,7 @@ defmodule PhxMediaLibrary.TestPost do
         accepts: ~w(image/jpeg image/png image/webp)
       ),
       collection(:responsive_off, responsive: false),
+      collection(:max_zero, max_files: 0),
       collection(:pixel_capped, max_pixels: 2_500),
       collection(:pixel_unlimited, max_pixels: :infinity),
       # Capped WebP: the served file fits in 100px; variants above it are skipped.

@@ -747,7 +747,7 @@ defmodule PhxMediaLibrary.MediaAdder do
           )
           |> Enum.reject(&(&1.uuid == new_item.uuid))
 
-        %Collection{max_files: max} when is_integer(max) ->
+        %Collection{max_files: max} when is_integer(max) and max > 0 ->
           items =
             model
             |> Helpers.media_data()

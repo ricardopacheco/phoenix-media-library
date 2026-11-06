@@ -467,7 +467,8 @@ defmodule PhxMediaLibrary.LiveUpload do
     Keyword.put_new(opts, :max_entries, 1)
   end
 
-  defp maybe_put_max_entries(opts, %Collection{max_files: max}) when is_integer(max) do
+  defp maybe_put_max_entries(opts, %Collection{max_files: max})
+       when is_integer(max) and max > 0 do
     Keyword.put_new(opts, :max_entries, max)
   end
 

@@ -376,6 +376,21 @@ defmodule PhxMediaLibrary.IntegrationTest do
       gallery_uuids = Enum.map(gallery, & &1.uuid)
       assert latest_uuid in gallery_uuids
     end
+
+    test "max_files: 0 means no limit, not 'delete everything'" do
+      post = create_post!()
+
+      for i <- 1..2 do
+        post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+        path = create_temp_file("note #{i}", "note_#{i}.txt")
+
+        assert {:ok, _media} =
+                 post |> PhxMediaLibrary.add(path) |> PhxMediaLibrary.to_collection(:max_zero)
+      end
+
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert length(PhxMediaLibrary.get_media(post, :max_zero)) == 2
+    end
   end
 
   # ---------------------------------------------------------------------------
