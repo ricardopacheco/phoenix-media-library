@@ -13,6 +13,7 @@ defmodule PhxMediaLibrary.MediaAdder do
     Collection,
     Config,
     Conversions,
+    FileName,
     Helpers,
     Media,
     MediaData,
@@ -224,7 +225,7 @@ defmodule PhxMediaLibrary.MediaAdder do
   defp do_download(url, custom_filename, req_opts) do
     case Req.get(url, req_opts) do
       {:ok, %{status: status, body: body, headers: headers}} when status in 200..299 ->
-        filename = custom_filename || filename_from_url(url, headers)
+        filename = FileName.safe(custom_filename || filename_from_url(url, headers))
         mime_type = get_content_type(headers) || MIME.from_path(filename)
 
         temp_path = write_temp_file(body, filename)
@@ -249,7 +250,8 @@ defmodule PhxMediaLibrary.MediaAdder do
 
   defp resolve_file_path(path, custom_filename) do
     with {:ok, stat} <- File.stat(path) do
-      filename = custom_filename || Path.basename(path)
+      # Client-supplied names end up in the storage path: keep one safe segment
+      filename = FileName.safe(custom_filename || Path.basename(path))
       mime_type = MIME.from_path(filename)
 
       {:ok,

@@ -50,6 +50,7 @@ defmodule PhxMediaLibrary do
   alias PhxMediaLibrary.{
     Config,
     Error,
+    FileName,
     Helpers,
     Media,
     MediaAdder,
@@ -676,7 +677,7 @@ defmodule PhxMediaLibrary do
   @spec presigned_upload_url(Ecto.Schema.t(), atom(), keyword()) ::
           {:ok, String.t(), map(), String.t()} | {:error, term()}
   def presigned_upload_url(model, collection_name, opts \\ []) do
-    filename = Keyword.fetch!(opts, :filename)
+    filename = opts |> Keyword.fetch!(:filename) |> FileName.safe()
     disk = Keyword.get(opts, :disk) || Helpers.default_disk(model, collection_name)
     storage = Config.storage_adapter(disk)
 
@@ -725,7 +726,9 @@ defmodule PhxMediaLibrary do
   @spec complete_external_upload(Ecto.Schema.t(), atom(), String.t(), keyword()) ::
           {:ok, MediaItem.t()} | {:error, term()}
   def complete_external_upload(model, collection_name, storage_path, opts) do
-    filename = Keyword.fetch!(opts, :filename)
+    # Sanitized exactly like presigned_upload_url/3, so the item's path matches
+    # the signed key
+    filename = opts |> Keyword.fetch!(:filename) |> FileName.safe()
     content_type = Keyword.fetch!(opts, :content_type)
     size = Keyword.fetch!(opts, :size)
     disk = Keyword.get(opts, :disk) || Helpers.default_disk(model, collection_name)

@@ -134,6 +134,39 @@ defmodule PhxMediaLibrary.Storage.DiskTest do
     end
   end
 
+  describe "paths outside the root" do
+    setup %{tmp_dir: tmp_dir} do
+      root = Path.join(tmp_dir, "root")
+      File.mkdir_p!(root)
+      outside = Path.join(tmp_dir, "outside.txt")
+      File.write!(outside, "secret")
+      {:ok, opts: [root: root, base_url: "/uploads"], outside: outside}
+    end
+
+    test "are refused by every operation", %{opts: opts, outside: outside} do
+      assert {:error, :path_outside_root} = Disk.put("../outside.txt", "x", opts)
+      assert {:error, :path_outside_root} = Disk.get("../outside.txt", opts)
+      assert {:error, :path_outside_root} = Disk.delete("../outside.txt", opts)
+      refute Disk.exists?("../outside.txt", opts)
+      assert Disk.path("../outside.txt", opts) == nil
+
+      assert File.read!(outside) == "secret"
+    end
+
+    test "including a sibling directory that shares the root's prefix", %{
+      opts: opts,
+      tmp_dir: tmp_dir
+    } do
+      File.mkdir_p!(Path.join(tmp_dir, "root-evil"))
+      assert {:error, :path_outside_root} = Disk.put("../root-evil/x.txt", "x", opts)
+    end
+
+    test "paths that stay inside after normalisation are fine", %{opts: opts} do
+      assert :ok = Disk.put("a/../b/file.txt", "ok", opts)
+      assert {:ok, "ok"} = Disk.get("b/file.txt", opts)
+    end
+  end
+
   describe "integration" do
     test "full lifecycle: put, exists, get, delete", %{opts: opts} do
       path = "lifecycle/test-file.txt"

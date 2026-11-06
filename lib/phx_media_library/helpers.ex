@@ -51,14 +51,7 @@ defmodule PhxMediaLibrary.Helpers do
   end
 
   # From sanitize_name/1 (duplicated in phx_media_library.ex, media_adder.ex)
-  def sanitize_name(filename) do
-    filename
-    |> Path.rootname()
-    |> String.downcase()
-    |> String.replace(~r/[^a-z0-9_-]/, "-")
-    |> String.replace(~r/-+/, "-")
-    |> String.trim("-")
-  end
+  def sanitize_name(filename), do: PhxMediaLibrary.FileName.slug(filename)
 
   # From get_collection_config/2 (duplicated in phx_media_library.ex, media_adder.ex, live_upload.ex)
   def collection_config(model, collection_name) do
