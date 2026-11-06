@@ -129,6 +129,53 @@ defmodule PhxMediaLibrary.ResponsiveImagesTest do
     end
   end
 
+  describe "WebP-served media" do
+    defp webp_file?(root, path) do
+      match?(
+        <<"RIFF", _size::binary-size(4), "WEBP", _::binary>>,
+        File.read!(Path.join(root, path))
+      )
+    end
+
+    test "variants are WebP, and the full-size entry is the WebP derivative", %{
+      root: root,
+      post: post
+    } do
+      assert {:ok, media} = add(post, :responsive_webp)
+      webp = PhxMediaLibrary.Webp.path(media)
+
+      [v160, v320, full] =
+        media.responsive_images["original"]["variants"] |> Enum.sort_by(& &1["width"])
+
+      assert {v160["width"], v320["width"], full["width"]} == {160, 320, 1000}
+
+      for %{"path" => path} <- [v160, v320] do
+        assert String.ends_with?(path, ".webp")
+        assert webp_file?(root, path)
+      end
+
+      assert full["path"] == webp
+
+      # Every file entry of the stored item's srcset is WebP (the inline tiny
+      # placeholder, a data: URI, is not a file).
+      files =
+        post
+        |> stored_item(:responsive_webp)
+        |> PhxMediaLibrary.srcset()
+        |> String.split(", ")
+        |> Enum.reject(&String.starts_with?(&1, "data:"))
+
+      assert length(files) == 3
+      assert Enum.all?(files, &(&1 =~ ".webp "))
+    end
+
+    test "without WebP, variants keep the original format", %{post: post} do
+      assert {:ok, media} = add(post, :responsive_plain)
+
+      for path <- variant_paths(media), do: assert(String.ends_with?(path, ".jpg"))
+    end
+  end
+
   describe "owned paths" do
     test "include every variant", %{root: root, post: post} do
       assert {:ok, _media} = add(post, :responsive_plain)

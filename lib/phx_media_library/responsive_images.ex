@@ -40,7 +40,7 @@ defmodule PhxMediaLibrary.ResponsiveImages do
 
   """
 
-  alias PhxMediaLibrary.{Config, Helpers, Media, MediaItem, PathGenerator, UrlGenerator}
+  alias PhxMediaLibrary.{Config, Helpers, Media, MediaItem, PathGenerator, UrlGenerator, Webp}
 
   @type responsive_data :: %{
           String.t() => [
@@ -242,7 +242,9 @@ defmodule PhxMediaLibrary.ResponsiveImages do
       |> Path.dirname()
       |> Path.join("responsive")
 
-    ext = Path.extname(media.file_name)
+    # Variants follow the served format: .webp when the item has a WebP
+    # derivative (the image processor encodes by the destination extension).
+    ext = if Webp.path(media), do: ".webp", else: Path.extname(media.file_name)
     base_name = Path.rootname(media.file_name)
 
     filename =
@@ -264,10 +266,16 @@ defmodule PhxMediaLibrary.ResponsiveImages do
          image,
          processor
        ) do
+    # Full-size srcset entry. For a WebP-served original it is the WebP
+    # derivative that already exists, so the whole srcset is WebP at no extra
+    # cost. Conversions point at their own file.
+    full_size_path =
+      (is_nil(conversion) && Webp.path(media)) || PathGenerator.relative_path(media, conversion)
+
     original_variant = %{
       "width" => orig_width,
       "height" => orig_height,
-      "path" => PathGenerator.relative_path(media, conversion)
+      "path" => full_size_path
     }
 
     all_variants = variants ++ [original_variant]

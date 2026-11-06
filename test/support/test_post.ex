@@ -31,6 +31,12 @@ defmodule PhxMediaLibrary.TestPost do
         webp: [keep_original: false],
         accepts: ~w(image/jpeg image/png image/webp)
       ),
+      # WebP + responsive: variants follow the WebP encoding.
+      collection(:responsive_webp,
+        webp: true,
+        responsive: [widths: [160, 320]],
+        accepts: ~w(image/jpeg image/png image/webp)
+      ),
       # Responsive without WebP: variants keep the original extension.
       collection(:responsive_plain,
         responsive: [widths: [160, 320]],

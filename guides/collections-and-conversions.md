@@ -285,7 +285,8 @@ Notes:
 - GIFs are left alone: transcoding an animated GIF would keep only its first
   frame. SVG and WebP uploads are served as they are.
 - Only new uploads get a WebP; existing media isn't converted retroactively.
-- Responsive variants keep the original's format for now.
+- Responsive variants of a WebP-served image are WebP too, and the WebP
+  derivative is the full-size `srcset` entry (see [Responsive Images](#responsive-images)).
 
 ## Checksum & Integrity Verification
 
@@ -347,7 +348,9 @@ config :phx_media_library,
 ```
 
 Only widths narrower than the image are generated; the full-size image is
-always the largest `srcset` entry. The global `enabled` doesn't turn on
+always the largest `srcset` entry. In a collection that serves [WebP](#webp),
+the variants are WebP too and the full-size entry is the WebP derivative, so
+the whole `srcset` is WebP. The global `enabled` doesn't turn on
 variants of the original for every collection — use `responsive:` for that.
 
 **Conversions** get their own variants when their collection's `responsive:`
