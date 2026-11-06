@@ -240,6 +240,80 @@ them:
   aspect ratio (upstream 0.8.4).
 - Version bumped to `0.8.0`, mirroring upstream's numbering.
 
+### v0.8.1 upstream sync (6 commits)
+
+Upstream `v0.8.1` has one code commit (`0c93d71`) and five documentation
+commits. Ported and adapted:
+
+- **Responsive WebP variants** (`0c93d71`) — variants of a WebP-served item
+  are `.webp`, and the full-size `srcset` entry is its WebP derivative. The
+  "WebP before responsive" ordering was already in place since the 0.8.0 sync.
+- **Per-collection responsive opt-in** (`0c93d71`) — `responsive: true |
+  false | [widths: [...]]` on collections, `Config.resolve_responsive/1`,
+  `ResponsiveImages.generate/3` with `widths:` (and `generate_all/2`). Two of
+  upstream's 0.9.0 fixes are built in: `with_responsive_images/1` works without
+  a global `enabled: true` (only a collection's `responsive: false` or an
+  explicit global `enabled: false` blocks it), and conversions' variants use
+  the collection's widths. `Config.responsive_for_collection?/1` now accepts a
+  keyword (it raised `FunctionClauseError` on one). When conversions get
+  variants is unchanged (collection setting, else the global switch).
+- **Variant paths from the path generator** (`0c93d71`) — this fork had the
+  same hardcoded `{owner_type}/{owner_id}/{uuid}/responsive` folder, which
+  put variants outside `PathGenerator.Tenant`/`DateBased` layouts.
+- **Guides rewrite** (`5708498`) — not ported; this fork's guides diverged
+  for JSONB. The Responsive Images and WebP sections of the collections guide
+  were updated instead.
+- **Docs housekeeping** (`a52d256`, `67308bc`, `fb290da`, `fc94835`) — not
+  ported: `temp_fix_live_media_upload.md` doesn't exist here, this CHANGELOG
+  keeps upstream entries as released, and `AGENTS.md` is the fork's own.
+- Responsive variants on upload had no end-to-end tests; they now do
+  (`test/phx_media_library/responsive_images_test.exs`).
+- Version bumped to `0.8.1`, mirroring upstream's numbering.
+
+## [0.8.1] - 2026-08-20
+
+### Added
+
+- **Responsive WebP variants.** Responsive `srcset` variants now inherit the
+  served format. When a collection serves WebP, its variants are written to
+  `.webp` paths and encoded as WebP (the image backend picks the encoder from
+  the destination extension), and the full-size `srcset` descriptor reuses the
+  already-generated WebP sibling, so the entire `srcset` is WebP at no extra
+  cost. Non-WebP collections keep the original extension, unchanged.
+- **Per-collection responsive opt-in.** A collection enables `srcset`
+  generation on add via its `responsive:` field (bool or keyword), with widths
+  overridable per-collection:
+
+  ```elixir
+  media_collections do
+    collection(:photos,  webp: true, responsive: true)                    # WebP variants, global widths
+    collection(:banners, webp: true, responsive: [widths: [640, 1280, 2560]])
+  end
+  ```
+
+  `PhxMediaLibrary.ResponsiveImages.generate/3` gains an optional `widths:`
+  option (defaults to the global config), so per-collection widths flow through
+  the add pipeline.
+
+### Changed
+
+- On add, WebP generation now runs before responsive generation, so
+  variants inherit the `.webp` encoding.
+- Responsive generation on add is opt-in per collection (`responsive:`) or
+  via `with_responsive_images/1`. Unlike WebP, the global `responsive_images`
+  config is not treated as an auto-enable for every collection. It supplies
+  the default widths only. This preserves the historical behaviour where only an
+  explicit request generated variants (no surprise generation for existing hosts
+  that had `responsive_images: [enabled: true]`).
+
+### Fixed
+
+- Responsive variant paths now derive from the configured path generator
+  instead of assuming the default `{type}/{id}/{uuid}` layout. This respects
+  custom/tenant/date generators and stringifies a non-binary
+  `mediable_id` (e.g. an integer primary key). Previously `Path.join` raised
+  when the id was not already a string.
+
 ## [0.8.0] - 2026-08-20
 
 ### Added
