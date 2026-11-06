@@ -2,7 +2,7 @@ defmodule PhxMediaLibrary.MixProject do
   use Mix.Project
 
   @version "0.6.0"
-  @source_url "https://github.com/mike-kostov/phx_media_library"
+  @source_url "https://github.com/ricardopacheco/phoenix-media-library"
 
   def project do
     [
@@ -94,7 +94,7 @@ defmodule PhxMediaLibrary.MixProject do
 
   defp package do
     [
-      maintainers: ["Mike Kostov"],
+      maintainers: ["Ricardo Pacheco"],
       licenses: ["MIT"],
       links: %{
         "GitHub" => @source_url,

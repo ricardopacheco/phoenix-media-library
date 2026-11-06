@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 > ## ⚠️ Fork notice
 >
-> This is a fork of [mike-kostov/phx_media_library](https://github.com/mike-kostov/phx_media_library).
+> This is a fork of [mike-kostov/phoenix-media-library](https://github.com/mike-kostov/phoenix-media-library).
 > Diverged from upstream `v0.5.1` (commit `526e22a`) to replace the polymorphic
 > `media` table with **embedded JSONB columns on each parent schema** for
 > better performance and a simpler operational model.

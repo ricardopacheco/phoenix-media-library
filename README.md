@@ -1,8 +1,6 @@
 # PhxMediaLibrary
 
-[![Hex.pm](https://img.shields.io/hexpm/v/phx_media_library.svg)](https://hex.pm/packages/phx_media_library)
-[![Hex Docs](https://img.shields.io/badge/hex-docs-blue.svg)](https://hexdocs.pm/phx_media_library)
-[![License](https://img.shields.io/hexpm/l/phx_media_library.svg)](https://github.com/mike-kostov/phx_media_library/blob/main/LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/ricardopacheco/phoenix-media-library/blob/main/LICENSE)
 
 A robust media management library for Elixir and Phoenix. Media data is stored in JSONB columns on your Ecto schemas — no separate media table needed. Architecture inspired by [Shrine](https://shrinerb.com/), based on [phoenix-media-library](https://github.com/mike-kostov/phoenix-media-library) by Mike Kostov.
 
@@ -194,7 +192,8 @@ Detailed documentation is organized into focused guides:
 | **[Telemetry](guides/telemetry.md)** | Events reference, attaching handlers, metrics examples |
 | **[Advanced Usage](guides/advanced.md)** | Reordering, mix tasks, testing strategies |
 
-Full API documentation is available on [HexDocs](https://hexdocs.pm/phx_media_library).
+This fork is not published to Hex yet. Generate the full API documentation
+locally with `mix docs` (output in `doc/index.html`).
 
 ## Contributing
 
