@@ -42,7 +42,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
 
   use Mix.Task
 
-  alias PhxMediaLibrary.{Config, Helpers, MediaData, ModelRegistry, PathGenerator}
+  alias PhxMediaLibrary.{Config, Helpers, MediaData, ModelRegistry, PathGenerator, Webp}
 
   @impl Mix.Task
   def run(args) do
@@ -158,7 +158,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
         acc
 
       full_path ->
-        if File.exists?(full_path) do
+        if File.exists?(full_path) or served_as_webp?(item) do
           acc
         else
           entry = %{
@@ -175,6 +175,10 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
         end
     end
   end
+
+  # An original replaced by its WebP (keep_original: false) isn't missing:
+  # the item is still served, so it must never be offered for removal.
+  defp served_as_webp?(item), do: Webp.stored?(item, Config.storage_adapter(item.disk))
 
   defp check_conversions(acc, item, module, row, collection) do
     (item.generated_conversions || %{})

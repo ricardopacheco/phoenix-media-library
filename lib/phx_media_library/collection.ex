@@ -16,6 +16,11 @@ defmodule PhxMediaLibrary.Collection do
   - `:fallback_url` — URL to use when the collection is empty
   - `:fallback_path` — filesystem path to use when the collection is empty
   - `:verify_content_type` — when `true`, verify file content matches its declared MIME type (default: `true`)
+  - `:responsive` — generate responsive image variants (`nil` falls back to the global config)
+  - `:webp` — WebP override for this collection: `true`/`false`, or a keyword of
+    knobs (`quality:`, `keep_original:`) merged over the global
+    `config :phx_media_library, :webp` (see `PhxMediaLibrary.Config.resolve_webp/1`).
+    `nil` (default) inherits the global setting.
 
   """
 
@@ -29,8 +34,12 @@ defmodule PhxMediaLibrary.Collection do
     :fallback_url,
     :fallback_path,
     :verify_content_type,
-    :responsive
+    :responsive,
+    :webp
   ]
+
+  @typedoc "A per-collection override: `true`, `false`, a keyword of knobs, or `nil` (inherit)."
+  @type override :: boolean() | keyword() | nil
 
   @type t :: %__MODULE__{
           name: atom(),
@@ -42,7 +51,8 @@ defmodule PhxMediaLibrary.Collection do
           fallback_url: String.t() | nil,
           fallback_path: String.t() | nil,
           verify_content_type: boolean(),
-          responsive: boolean() | nil
+          responsive: boolean() | nil,
+          webp: override()
         }
 
   @doc """
@@ -59,10 +69,15 @@ defmodule PhxMediaLibrary.Collection do
   - `:fallback_path` - Path when collection is empty
   - `:verify_content_type` - Verify file content matches declared MIME type (default: true)
   - `:responsive` - Generate responsive image variants after conversions (default: nil, falls back to global config)
+  - `:webp` - Serve a WebP derivative of uploaded images: `true`/`false`/keyword, merged over the global config (default: inherit)
 
   ## Examples
 
       Collection.new(:images, accepts: ~w(image/jpeg image/png), max_size: 5_000_000)
+
+      Collection.new(:photos, webp: true)
+
+      Collection.new(:hero, webp: [quality: 90, keep_original: false])
 
       Collection.new(:avatar, single_file: true, max_size: 2_000_000)
 
@@ -86,7 +101,8 @@ defmodule PhxMediaLibrary.Collection do
       fallback_url: Keyword.get(opts, :fallback_url),
       fallback_path: Keyword.get(opts, :fallback_path),
       verify_content_type: Keyword.get(opts, :verify_content_type, true),
-      responsive: Keyword.get(opts, :responsive)
+      responsive: Keyword.get(opts, :responsive),
+      webp: Keyword.get(opts, :webp)
     }
   end
 end

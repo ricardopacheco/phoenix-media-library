@@ -141,6 +141,36 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
       assert output =~ "No HasMedia schemas registered."
     end
 
+    test "an original replaced by its WebP is not missing, and --fix keeps it", %{
+      local_root: local_root
+    } do
+      post = Fixtures.create_test_post()
+      uuid = Ecto.UUID.generate()
+      webp_path = "posts/#{post.id}/#{uuid}/photo.webp"
+
+      Fixtures.create_media_in_jsonb(post, "images",
+        uuid: uuid,
+        disk: "local",
+        file_name: "photo.jpg",
+        custom_properties: %{"webp" => webp_path}
+      )
+
+      # keep_original: false — only the WebP is on disk
+      full = Path.join(local_root, webp_path)
+      File.mkdir_p!(Path.dirname(full))
+      File.write!(full, "x")
+
+      send(self(), {:mix_shell_input, :yes?, true})
+      run(["--fix"])
+      output = drain_output()
+
+      refute output =~ "missing original file"
+      refute output =~ "removed"
+
+      reloaded = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert [_item] = reloaded |> Helpers.media_data() |> MediaData.get_collection("images")
+    end
+
     test "--fix removes missing-original items from JSONB after confirming" do
       post = Fixtures.create_test_post()
       _post = create_local_media(post, "images", create_file: false)

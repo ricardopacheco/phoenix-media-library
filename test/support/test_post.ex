@@ -22,7 +22,15 @@ defmodule PhxMediaLibrary.TestPost do
       collection(:avatar, single_file: true),
       collection(:gallery, max_files: 5),
       collection(:small_files, max_size: 1_000, accepts: ~w(text/plain)),
-      collection(:unverified, verify_content_type: false)
+      collection(:unverified, verify_content_type: false),
+      collection(:webp_photos,
+        webp: true,
+        accepts: ~w(image/jpeg image/png image/webp image/gif)
+      ),
+      collection(:webp_only,
+        webp: [keep_original: false],
+        accepts: ~w(image/jpeg image/png image/webp)
+      )
     ]
   end
 

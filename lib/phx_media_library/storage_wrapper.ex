@@ -6,6 +6,8 @@ defmodule PhxMediaLibrary.StorageWrapper do
 
   defstruct [:adapter, :config]
 
+  @type t :: %__MODULE__{adapter: module(), config: keyword()}
+
   def put(%__MODULE__{adapter: adapter, config: config}, path, content) do
     Telemetry.span(
       [:phx_media_library, :storage],

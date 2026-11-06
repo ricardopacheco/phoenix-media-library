@@ -90,7 +90,7 @@ defmodule PhxMediaLibrary.UrlGenerator do
   which serves the file with `Content-Disposition: attachment`.
   """
 
-  alias PhxMediaLibrary.{Config, PathGenerator, StorageWrapper}
+  alias PhxMediaLibrary.{Config, PathGenerator, StorageWrapper, Webp}
 
   @doc """
   Generate a URL for a media item.
@@ -99,7 +99,9 @@ defmodule PhxMediaLibrary.UrlGenerator do
 
   - `media` — the `PhxMediaLibrary.Media` struct.
   - `conversion` — optional conversion name atom (e.g. `:thumb`). Pass
-    `nil` (default) for the original file.
+    `nil` (default) for the original file. When the item has a WebP
+    derivative (`PhxMediaLibrary.Webp`), that is served instead of the
+    original.
   - `opts` — keyword list of options (see module docs).
   """
   @spec url(map(), atom() | nil, keyword()) :: String.t()
@@ -107,12 +109,17 @@ defmodule PhxMediaLibrary.UrlGenerator do
     {cache_bust, adapter_opts} = Keyword.pop(opts, :cache_bust, false)
 
     storage = Config.storage_adapter(media.disk)
-    relative_path = PathGenerator.relative_path(media, conversion)
+    relative_path = served_path(media, conversion)
 
     base_url = StorageWrapper.url(storage, relative_path, adapter_opts)
 
     maybe_add_cache_bust(base_url, media.checksum, cache_bust)
   end
+
+  # The original is served as its WebP derivative when one exists; named
+  # conversions resolve normally.
+  defp served_path(media, nil), do: Webp.path(media) || PathGenerator.relative_path(media, nil)
+  defp served_path(media, conversion), do: PathGenerator.relative_path(media, conversion)
 
   @doc """
   Generate a URL for a specific path (used for responsive images / poster

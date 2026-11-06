@@ -98,6 +98,7 @@ end
 | **Schema integration** | JSONB column per schema, any primary key type (UUID, integer, string) with no configuration, declarative DSL for collections & conversions |
 | **Collections** | MIME validation, file limits, size limits, single-file mode, fallback URLs |
 | **Image conversions** | Thumbnails, resizes, format conversion, responsive srcset — optional, works without libvips |
+| **WebP** | Per-collection `webp:` opt-in: JPEG/PNG/HEIC uploads served as WebP, optionally replacing the original |
 | **Metadata extraction** | Auto-extract dimensions, EXIF, format, type classification; stored in `metadata` JSON field |
 | **Remote URLs** | `add_from_url/3` with scheme validation, custom headers, timeout, download telemetry |
 | **Storage** | Local disk, S3, in-memory (tests), or custom adapters via `PhxMediaLibrary.Storage` behaviour |

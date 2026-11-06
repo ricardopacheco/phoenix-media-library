@@ -122,15 +122,39 @@ defmodule Mix.Tasks.PhxMediaLibrary.CleanTest do
     end
   end
 
-  test "reports a missing original", %{root: root} do
-    [original | _] = create_item_with_every_file(root)
+  test "reports an item with neither its original nor its WebP", %{root: root} do
+    [original | _] = owned = create_item_with_every_file(root)
+    webp = Enum.find(owned, &String.ends_with?(&1, ".webp"))
     File.rm!(Path.join(root, original))
+    File.rm!(Path.join(root, webp))
 
     run([])
     output = drain_output()
 
     assert output =~ "Found 1 missing file(s)"
     assert output =~ "photo.jpg"
+  end
+
+  test "an original replaced by its WebP is not reported missing", %{root: root} do
+    post = Fixtures.create_test_post()
+    uuid = Ecto.UUID.generate()
+    webp_path = "posts/#{post.id}/#{uuid}/photo.webp"
+
+    Fixtures.create_media_in_jsonb(post, "images", %{
+      uuid: uuid,
+      file_name: "photo.jpg",
+      disk: "local",
+      custom_properties: %{"webp" => webp_path}
+    })
+
+    # keep_original: false — only the WebP is on disk
+    write_file(root, webp_path)
+
+    run([])
+    output = drain_output()
+
+    assert output =~ "No missing files found"
+    assert output =~ "No orphaned files found"
   end
 
   test "a disk with files but no media items doesn't crash", %{root: root} do

@@ -227,10 +227,13 @@ defmodule Mix.Tasks.PhxMediaLibrary.Clean do
 
   defp find_missing_files([], _storage), do: []
 
+  # An original replaced by its WebP (keep_original: false) isn't missing.
   defp find_missing_files(items, storage) do
     Enum.filter(items, fn item ->
       path = PhxMediaLibrary.PathGenerator.relative_path(item, nil)
-      not PhxMediaLibrary.StorageWrapper.exists?(storage, path)
+
+      not PhxMediaLibrary.StorageWrapper.exists?(storage, path) and
+        not PhxMediaLibrary.Webp.stored?(item, storage)
     end)
   end
 

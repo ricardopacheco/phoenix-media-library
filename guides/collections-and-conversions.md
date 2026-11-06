@@ -50,6 +50,7 @@ end
 | `:fallback_path` | `String.t()` | `nil` | Filesystem path returned when collection is empty |
 | `:verify_content_type` | `boolean()` | `true` | Verify file content matches declared MIME type via magic bytes |
 | `:responsive` | `boolean()` | `nil` (global config) | Generate responsive image variants after conversions; overrides global `responsive_images: [enabled: ...]` setting |
+| `:webp` | `boolean()` or keyword | `nil` (global config) | Serve a WebP derivative of uploaded images; see [WebP](#webp) |
 
 ### Content-Type Verification
 
@@ -238,6 +239,53 @@ mix phx_media_library.regenerate --conversion thumb
 mix phx_media_library.regenerate --collection images
 mix phx_media_library.regenerate --dry-run
 ```
+
+## WebP
+
+A collection can transcode raster uploads (JPEG, PNG, HEIC/HEIF, TIFF, BMP)
+to WebP for smaller, faster images. The WebP is stored beside the original
+(`…/photo.jpg` → `…/photo.webp`), recorded in the item's
+`custom_properties["webp"]`, and served by `PhxMediaLibrary.url/2` and the
+image components instead of the original — `<img src>` needs no change.
+Named conversions are unaffected and keep the original's format.
+
+Opt in per collection, or for every collection through the global config;
+each knob can be overridden per collection:
+
+```elixir
+# config/config.exs (these are the defaults)
+config :phx_media_library,
+  webp: [enabled: false, quality: 82, keep_original: true]
+
+media_collections do
+  collection :photos, webp: true                                 # jpg/png/HEIC → served as WebP
+  collection :hero, webp: [quality: 90, keep_original: false]    # a keyword implies enabled: true
+  collection :logos, webp: false                                 # opt out of a global enabled: true
+end
+```
+
+| Knob | Default | Description |
+|------|---------|-------------|
+| `:enabled` | `false` | Generate and serve the WebP |
+| `:quality` | `82` | WebP quality (1–100) |
+| `:keep_original` | `true` | Keep the uploaded file. With `false` it is deleted once the upload's conversions exist |
+
+**`keep_original: false`.** Conversions are made from the original, so for
+these collections they run synchronously during the upload (whatever the
+`:async_processor`), and the original is deleted last — and only if every
+conversion was generated, so a failed one can be retried. The item's
+`file_name` and `mime_type` keep describing the uploaded file. `mix
+phx_media_library.doctor` and `mix phx_media_library.clean` don't report such
+originals as missing while their WebP exists.
+
+Notes:
+
+- WebP needs the optional `:image` dependency (libvips). Without it, or when
+  encoding fails, the upload is stored as usual and the original is served.
+- GIFs are left alone: transcoding an animated GIF would keep only its first
+  frame. SVG and WebP uploads are served as they are.
+- Only new uploads get a WebP; existing media isn't converted retroactively.
+- Responsive variants keep the original's format for now.
 
 ## Checksum & Integrity Verification
 

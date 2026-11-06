@@ -12,6 +12,7 @@ defmodule PhxMediaLibrary.MediaAdder do
   alias PhxMediaLibrary.{
     Collection,
     Config,
+    Conversions,
     Helpers,
     Media,
     MediaData,
@@ -22,7 +23,8 @@ defmodule PhxMediaLibrary.MediaAdder do
     ResponsiveImages,
     StorageWrapper,
     Telemetry,
-    UrlGenerator
+    UrlGenerator,
+    Webp
   }
 
   defstruct [
@@ -124,8 +126,7 @@ defmodule PhxMediaLibrary.MediaAdder do
              {:ok, metadata} <- maybe_extract_metadata(adder, file_info),
              {:ok, media_item} <-
                store_and_persist(adder, collection_name, file_info, metadata, opts) do
-          # Trigger async conversion processing
-          maybe_process_conversions(adder.model, media_item, collection_name)
+          process_conversions(adder.model, media_item, collection_name)
           {:ok, media_item}
         end
 
@@ -386,6 +387,11 @@ defmodule PhxMediaLibrary.MediaAdder do
     with {:ok, checksum} <- stream_and_checksum(storage, storage_path, file_info.path) do
       media_item = %{media_item | checksum: checksum, checksum_algorithm: "sha256"}
 
+      # The WebP derivative only needs the local source, so it is made before
+      # the item is first written and goes into that same write.
+      media_item =
+        maybe_generate_webp(adder, collection_name, media_item, file_info, storage, storage_path)
+
       # Add item to model's JSONB column
       updated_model =
         Helpers.update_media_data(adder.model, fn data ->
@@ -402,6 +408,16 @@ defmodule PhxMediaLibrary.MediaAdder do
       if file_info.temp, do: File.rm(file_info.path)
 
       {:ok, media_item}
+    end
+  end
+
+  defp maybe_generate_webp(adder, collection_name, media_item, file_info, storage, storage_path) do
+    settings = Webp.settings(adder.model, collection_name)
+
+    if Keyword.get(settings, :enabled, false) and Webp.convertible?(file_info.mime_type) do
+      Webp.generate(media_item, file_info.path, settings, storage, storage_path)
+    else
+      media_item
     end
   end
 
@@ -585,20 +601,83 @@ defmodule PhxMediaLibrary.MediaAdder do
     end
   end
 
-  defp maybe_process_conversions(model, media_item, collection_name) do
+  # Dispatches the collection's conversions. When a WebP derivative replaces
+  # the original (keep_original: false), conversions — which read the
+  # original — run synchronously first, and the original is deleted last,
+  # only once every conversion exists (so a failed one can be retried).
+  defp process_conversions(model, media_item, collection_name) do
     conversions = get_conversions_for(model, collection_name)
+    context = conversion_context(model, media_item, collection_name)
 
-    if conversions != [] do
-      # Pass context for the async processor to locate the media item
-      context = %{
-        owner_module: model.__struct__,
-        owner_id: model.id,
-        collection_name: to_string(collection_name),
-        item_uuid: media_item.uuid
-      }
+    cond do
+      replaces_original?(model, media_item, collection_name) ->
+        if run_conversions_sync(context, conversions) == :ok and
+             all_generated?(model, media_item, collection_name, conversions) do
+          delete_original(media_item)
+        end
 
-      Config.async_processor().process_async(context, conversions)
+      conversions != [] ->
+        Config.async_processor().process_async(context, conversions)
+
+      true ->
+        :ok
     end
+  end
+
+  # Context for the async processor to locate the media item
+  defp conversion_context(model, media_item, collection_name) do
+    %{
+      owner_module: model.__struct__,
+      owner_id: model.id,
+      collection_name: to_string(collection_name),
+      item_uuid: media_item.uuid
+    }
+  end
+
+  defp replaces_original?(model, media_item, collection_name) do
+    Webp.path(media_item) != nil and
+      not Keyword.get(Webp.settings(model, collection_name), :keep_original, true)
+  end
+
+  defp run_conversions_sync(_context, []), do: :ok
+
+  defp run_conversions_sync(context, conversions) do
+    processor = Config.async_processor()
+    Code.ensure_loaded(processor)
+
+    if function_exported?(processor, :process_sync, 2) do
+      processor.process_sync(context, conversions)
+    else
+      Conversions.process(context, conversions)
+    end
+  end
+
+  # Conversions.process/2 reports :ok even when single conversions fail, so
+  # check what was actually recorded on the stored item.
+  defp all_generated?(_model, _media_item, _collection_name, []), do: true
+
+  defp all_generated?(model, media_item, collection_name, conversions) do
+    stored =
+      case Config.repo().get(model.__struct__, model.id) do
+        nil ->
+          nil
+
+        fresh ->
+          fresh
+          |> Helpers.media_data()
+          |> MediaData.get_item(collection_name, media_item.uuid,
+            owner_type: media_item.owner_type,
+            owner_id: media_item.owner_id
+          )
+      end
+
+    generated = (stored && stored.generated_conversions) || %{}
+    Enum.all?(conversions, &(generated[to_string(&1.name)] == true))
+  end
+
+  defp delete_original(media_item) do
+    storage = Config.storage_adapter(media_item.disk)
+    StorageWrapper.delete(storage, PathGenerator.relative_path(media_item, nil))
   end
 
   defp next_order(model, collection_name) do
