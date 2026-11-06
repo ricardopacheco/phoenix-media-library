@@ -278,4 +278,40 @@ defmodule PhxMediaLibrary.UploadHardeningTest do
                "Image is too large (1600.0 megapixels, maximum allowed is 100.0 megapixels)"
     end
   end
+
+  describe "cleanup when an upload fails" do
+    defp download_temps do
+      System.tmp_dir!()
+      |> File.ls!()
+      |> Enum.filter(&String.starts_with?(&1, "phx_media_download_"))
+    end
+
+    test "a downloaded temp file is removed when validation fails", %{post: post} do
+      png = File.read!(create_temp_image(format: :png, width: 10, height: 10))
+      before = download_temps()
+
+      # PNG bytes served as page.html: the content-type check refuses them
+      opts = [req_options: [plug: fn conn -> Plug.Conn.send_resp(conn, 200, png) end]]
+
+      assert {:error, {:content_type_mismatch, _, _}} =
+               post
+               |> PhxMediaLibrary.add_from_url("http://93.184.215.14/page.html", opts)
+               |> PhxMediaLibrary.to_collection(:images, disk: :local)
+
+      assert download_temps() -- before == []
+    end
+
+    test "stored files are removed when the JSONB write fails", %{root: root, post: post} do
+      # The parent disappears mid-upload: storing works, the write raises.
+      TestRepo.delete!(post)
+
+      assert_raise Ecto.NoResultsError, fn ->
+        post
+        |> PhxMediaLibrary.add(create_temp_image(format: :jpg, width: 20, height: 20))
+        |> PhxMediaLibrary.to_collection(:webp_photos, disk: :local)
+      end
+
+      assert files_under(root) == []
+    end
+  end
 end

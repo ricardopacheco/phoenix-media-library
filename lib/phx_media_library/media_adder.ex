@@ -121,16 +121,8 @@ defmodule PhxMediaLibrary.MediaAdder do
 
     Telemetry.span([:phx_media_library, :add], telemetry_metadata, fn ->
       result =
-        with {:ok, file_info} <- resolve_source(adder, collection_name),
-             {:ok, file_info, header} <- read_and_detect_mime(file_info),
-             {:ok, _validated} <- validate_collection(adder, collection_name, file_info),
-             :ok <- maybe_verify_content_type(adder, collection_name, file_info, header),
-             :ok <- validate_image_pixels(adder, collection_name, file_info),
-             {:ok, metadata} <- maybe_extract_metadata(adder, file_info),
-             {:ok, media_item} <-
-               store_and_persist(adder, collection_name, file_info, metadata, opts) do
-          process_conversions(adder.model, media_item, collection_name)
-          {:ok, media_item}
+        with {:ok, file_info} <- resolve_source(adder, collection_name) do
+          add_file(adder, collection_name, file_info, opts)
         end
 
       stop_metadata =
@@ -142,6 +134,33 @@ defmodule PhxMediaLibrary.MediaAdder do
       {result, stop_metadata}
     end)
   end
+
+  # Validates, stores and persists a resolved source. A downloaded temp file
+  # is removed when anything fails, including an exception (store_and_persist/5
+  # removes it on success).
+  defp add_file(adder, collection_name, file_info, opts) do
+    result =
+      with {:ok, file_info, header} <- read_and_detect_mime(file_info),
+           {:ok, _validated} <- validate_collection(adder, collection_name, file_info),
+           :ok <- maybe_verify_content_type(adder, collection_name, file_info, header),
+           :ok <- validate_image_pixels(adder, collection_name, file_info),
+           {:ok, metadata} <- maybe_extract_metadata(adder, file_info),
+           {:ok, media_item} <-
+             store_and_persist(adder, collection_name, file_info, metadata, opts) do
+        process_conversions(adder.model, media_item, collection_name)
+        {:ok, media_item}
+      end
+
+    with {:error, _} <- result, do: remove_temp(file_info)
+    result
+  rescue
+    exception ->
+      remove_temp(file_info)
+      reraise exception, __STACKTRACE__
+  end
+
+  defp remove_temp(%{temp: true, path: path}), do: File.rm(path)
+  defp remove_temp(_file_info), do: :ok
 
   # ---------------------------------------------------------------------------
   # Source resolution  # ---------------------------------------------------------------------------
@@ -385,11 +404,18 @@ defmodule PhxMediaLibrary.MediaAdder do
       media_item =
         maybe_generate_webp(adder, collection_name, media_item, file_info, storage, storage_path)
 
-      # Add item to model's JSONB column
+      # Add item to model's JSONB column. If that write fails, the files
+      # already stored (original, WebP) would be orphans: remove them.
       updated_model =
-        Helpers.update_media_data(adder.model, fn data ->
-          MediaData.put_item(data, collection_name, media_item)
-        end)
+        try do
+          Helpers.update_media_data(adder.model, fn data ->
+            MediaData.put_item(data, collection_name, media_item)
+          end)
+        rescue
+          exception ->
+            Media.delete_files(media_item)
+            reraise exception, __STACKTRACE__
+        end
 
       # Handle single file / max_files constraints
       maybe_cleanup_collection(updated_model, collection_name, media_item)
