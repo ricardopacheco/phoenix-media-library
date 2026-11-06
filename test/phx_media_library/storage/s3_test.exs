@@ -134,7 +134,13 @@ defmodule PhxMediaLibrary.Storage.S3Test do
       # Deleting from a non-existent bucket returns
       # {:error, {:http_error, 404, ...}}. The adapter swallows the 404 to
       # keep delete idempotent in face of upstream churn.
-      bucket_opts = Keyword.put(@s3_opts, :bucket, "nonexistent-bucket-xyz-#{:erlang.unique_integer([:positive])}")
+      bucket_opts =
+        Keyword.put(
+          @s3_opts,
+          :bucket,
+          "nonexistent-bucket-xyz-#{:erlang.unique_integer([:positive])}"
+        )
+
       assert :ok = S3.delete("any/path", bucket_opts)
     end
   end

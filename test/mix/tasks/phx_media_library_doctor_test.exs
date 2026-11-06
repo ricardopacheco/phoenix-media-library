@@ -10,6 +10,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
     original_registry = Application.get_env(:phx_media_library, :model_registry, %{})
 
     Mix.shell(Mix.Shell.Process)
+
     Application.put_env(:phx_media_library, :model_registry, %{
       "posts" => PhxMediaLibrary.TestPost
     })
@@ -104,9 +105,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
       post = Fixtures.create_test_post()
 
       _post =
-        create_local_media(post, "images",
-          generated_conversions: %{"thumb" => true}
-        )
+        create_local_media(post, "images", generated_conversions: %{"thumb" => true})
 
       run([])
       output = drain_output()
@@ -161,9 +160,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
       post = Fixtures.create_test_post()
 
       _post =
-        create_local_media(post, "images",
-          generated_conversions: %{"thumb" => true}
-        )
+        create_local_media(post, "images", generated_conversions: %{"thumb" => true})
 
       send(self(), {:mix_shell_input, :yes?, true})
 

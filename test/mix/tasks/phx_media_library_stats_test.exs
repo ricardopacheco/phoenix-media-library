@@ -10,6 +10,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.StatsTest do
     original_registry = Application.get_env(:phx_media_library, :model_registry, %{})
 
     Mix.shell(Mix.Shell.Process)
+
     Application.put_env(:phx_media_library, :model_registry, %{
       "posts" => PhxMediaLibrary.TestPost
     })

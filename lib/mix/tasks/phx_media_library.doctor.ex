@@ -74,9 +74,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
     models = filter_models(ModelRegistry.all_models(), type_filter)
 
     if models == [] do
-      Mix.shell().info(
-        "#{IO.ANSI.yellow()}No HasMedia schemas registered.#{IO.ANSI.reset()}"
-      )
+      Mix.shell().info("#{IO.ANSI.yellow()}No HasMedia schemas registered.#{IO.ANSI.reset()}")
     else
       if skip_files? do
         Mix.shell().info(
@@ -255,9 +253,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
       if Mix.shell().yes?(prompt) do
         remove_item_from_jsonb(repo, entry)
 
-        Mix.shell().info(
-          "    #{IO.ANSI.green()}removed#{IO.ANSI.reset()} #{entry.uuid}"
-        )
+        Mix.shell().info("    #{IO.ANSI.green()}removed#{IO.ANSI.reset()} #{entry.uuid}")
       end
     end)
 

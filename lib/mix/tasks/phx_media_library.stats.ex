@@ -92,7 +92,9 @@ defmodule Mix.Tasks.PhxMediaLibrary.Stats do
       column = module.__media_column__()
 
       coll_rows = fetch_collection_stats(repo, type, table, column, collection_filter)
-      disk_acc = merge_disk_stats(disk_acc, fetch_disk_stats(repo, table, column, collection_filter))
+
+      disk_acc =
+        merge_disk_stats(disk_acc, fetch_disk_stats(repo, table, column, collection_filter))
 
       {coll_acc ++ coll_rows, disk_acc}
     end)

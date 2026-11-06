@@ -116,7 +116,10 @@ defmodule PhxMediaLibrary.PathGenerator.Tenant do
   @spec relative_path(map(), atom() | String.t() | nil, map()) :: String.t()
   def relative_path(media, conversion, path_context) do
     tenant_id = extract_tenant_id(path_context)
-    base_path = Path.join([tenant_id, to_string(media.owner_type), to_string(media.owner_id), media.uuid])
+
+    base_path =
+      Path.join([tenant_id, to_string(media.owner_type), to_string(media.owner_id), media.uuid])
+
     filename = conversion_filename(media, conversion)
     Path.join(base_path, filename)
   end
@@ -173,7 +176,14 @@ defmodule PhxMediaLibrary.PathGenerator.Tenant do
   @spec for_new_media(map(), map()) :: String.t()
   def for_new_media(attrs, path_context) do
     tenant_id = extract_tenant_id(path_context)
-    Path.join([tenant_id, to_string(attrs.owner_type), to_string(attrs.owner_id), attrs.uuid, attrs.file_name])
+
+    Path.join([
+      tenant_id,
+      to_string(attrs.owner_type),
+      to_string(attrs.owner_id),
+      attrs.uuid,
+      attrs.file_name
+    ])
   end
 
   # ---------------------------------------------------------------------------
