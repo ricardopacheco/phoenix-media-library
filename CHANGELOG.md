@@ -108,6 +108,25 @@ Cherry-picked from upstream `v0.6.0` and adapted to JSONB:
   part of every multipart upload to be lost. Fixed via a sentinel-based
   `Stream.transform/3` rewrite that flushes the leftover buffer in-band.
 
+### v0.6.1 upstream sync (2 commits)
+
+Upstream `v0.6.1` has no CHANGELOG entry of its own; it only fixes package
+metadata and docs. Both commits were adapted to point at this fork:
+
+- **`source_url` fix (upstream `c8b4616`)** — upstream corrected
+  `@source_url` to `mike-kostov/phoenix-media-library`. Here it now points
+  to this fork (`ricardopacheco/phoenix-media-library`), which drives the
+  package links and the docs' source links. Also: `maintainers` is now
+  `["Ricardo Pacheco"]`, the README's Hex.pm/HexDocs badges were removed and
+  the license badge links to this repository (this fork is not on Hex yet),
+  and the fork notice above links to the correct upstream URL.
+- **Install docs (upstream `98b1e18`)** — upstream bumped the install
+  snippet to `~> 0.6.0`. Here the README and the getting-started guide
+  install from GitHub pinned to a release tag
+  (`github: "ricardopacheco/phoenix-media-library", tag: "v0.6.1"`), since
+  `phx_media_library` on Hex is the upstream library with a `media` table.
+- Version bumped to `0.6.1`, mirroring upstream's numbering.
+
 ## [0.6.0] - 2026-03-31
 
 ### Added
