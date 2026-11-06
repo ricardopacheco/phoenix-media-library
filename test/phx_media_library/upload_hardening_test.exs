@@ -192,4 +192,90 @@ defmodule PhxMediaLibrary.UploadHardeningTest do
                |> PhxMediaLibrary.to_collection(:small_files, disk: :local)
     end
   end
+
+  describe "image pixel limit" do
+    # A 66-byte PNG whose header declares 40000 x 40000 pixels (1.6 GP):
+    # decoding it would take gigabytes; reading the header takes nothing.
+    defp pixel_flood do
+      chunk = fn type, data ->
+        <<byte_size(data)::32, type::binary, data::binary, :erlang.crc32(type <> data)::32>>
+      end
+
+      png =
+        <<0x89, "PNG", 0x0D, 0x0A, 0x1A, 0x0A>> <>
+          chunk.("IHDR", <<40_000::32, 40_000::32, 8, 2, 0, 0, 0>>) <>
+          chunk.("IDAT", :zlib.compress(<<0>>)) <> chunk.("IEND", "")
+
+      path = create_temp_file(png, "flood.png")
+      on_exit(fn -> File.rm(path) end)
+      path
+    end
+
+    defp image(width, height) do
+      path = create_temp_image(format: :png, width: width, height: height)
+      on_exit(fn -> File.rm(path) end)
+      path
+    end
+
+    defp put_max_image_pixels(value) do
+      original = Application.fetch_env(:phx_media_library, :max_image_pixels)
+      Application.put_env(:phx_media_library, :max_image_pixels, value)
+
+      on_exit(fn ->
+        case original do
+          {:ok, v} -> Application.put_env(:phx_media_library, :max_image_pixels, v)
+          :error -> Application.delete_env(:phx_media_library, :max_image_pixels)
+        end
+      end)
+    end
+
+    test "a pixel flood is refused by the default 100 megapixel limit", %{post: post} do
+      assert {:error, {:image_too_large, 1_600_000_000, 100_000_000}} =
+               post
+               |> PhxMediaLibrary.add(pixel_flood())
+               |> PhxMediaLibrary.to_collection(:images, disk: :local)
+    end
+
+    test "a collection's max_pixels applies", %{post: post} do
+      assert {:error, {:image_too_large, 10_000, 2_500}} =
+               post
+               |> PhxMediaLibrary.add(image(100, 100))
+               |> PhxMediaLibrary.to_collection(:pixel_capped, disk: :local)
+
+      assert {:ok, _} =
+               post
+               |> PhxMediaLibrary.add(image(50, 50))
+               |> PhxMediaLibrary.to_collection(:pixel_capped, disk: :local)
+    end
+
+    test "the global max_image_pixels applies to collections without one", %{post: post} do
+      put_max_image_pixels(1_000)
+
+      assert {:error, {:image_too_large, 10_000, 1_000}} =
+               post
+               |> PhxMediaLibrary.add(image(100, 100))
+               |> PhxMediaLibrary.to_collection(:images, disk: :local)
+    end
+
+    test ":infinity disables the check", %{post: post} do
+      put_max_image_pixels(1_000)
+
+      assert {:ok, _} =
+               post
+               |> PhxMediaLibrary.add(image(100, 100))
+               |> PhxMediaLibrary.to_collection(:pixel_unlimited, disk: :local)
+    end
+
+    test "the error reads as a validation message" do
+      error =
+        PhxMediaLibrary.ValidationError.exception(
+          reason: :image_too_large,
+          value: 1_600_000_000,
+          constraint: 100_000_000
+        )
+
+      assert error.message ==
+               "Image is too large (1600.0 megapixels, maximum allowed is 100.0 megapixels)"
+    end
+  end
 end

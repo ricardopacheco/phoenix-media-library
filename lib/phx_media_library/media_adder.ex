@@ -125,6 +125,7 @@ defmodule PhxMediaLibrary.MediaAdder do
              {:ok, file_info, header} <- read_and_detect_mime(file_info),
              {:ok, _validated} <- validate_collection(adder, collection_name, file_info),
              :ok <- maybe_verify_content_type(adder, collection_name, file_info, header),
+             :ok <- validate_image_pixels(adder, collection_name, file_info),
              {:ok, metadata} <- maybe_extract_metadata(adder, file_info),
              {:ok, media_item} <-
                store_and_persist(adder, collection_name, file_info, metadata, opts) do
@@ -265,6 +266,31 @@ defmodule PhxMediaLibrary.MediaAdder do
   end
 
   defp validate_file_size(_config, _file_info), do: :ok
+
+  # Reject images that would need too much memory to decode ("pixel floods":
+  # a tiny PNG declaring 40000x40000). Opening reads only the header, so the
+  # check itself decodes nothing. Files the processor can't open pass through;
+  # nothing will decode them either.
+  defp validate_image_pixels(%__MODULE__{model: model}, collection_name, file_info) do
+    max_pixels = max_pixels(model, collection_name)
+    processor = Config.image_processor()
+
+    with true <- image?(file_info.mime_type) and is_integer(max_pixels),
+         {:ok, image} <- processor.open(file_info.path),
+         {:ok, {width, height}} <- processor.dimensions(image),
+         true <- width * height > max_pixels do
+      {:error, {:image_too_large, width * height, max_pixels}}
+    else
+      _ -> :ok
+    end
+  end
+
+  defp max_pixels(model, collection_name) do
+    case Helpers.collection_config(model, collection_name) do
+      %Collection{max_pixels: max_pixels} when not is_nil(max_pixels) -> max_pixels
+      _ -> Config.max_image_pixels()
+    end
+  end
 
   # How many bytes to read for magic-byte MIME detection.
   # TAR signatures live at offset 257, so 512 bytes covers all known formats.

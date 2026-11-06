@@ -253,6 +253,29 @@ defmodule PhxMediaLibrary.Config do
     Keyword.get(responsive_images_config(), :tiny_placeholder, true)
   end
 
+  # ── Image pixel limit ───────────────────────────────────────────────────────
+
+  @default_max_image_pixels 100_000_000
+
+  @doc """
+  Maximum image size in pixels (width × height) accepted on upload.
+
+  Decoding takes about 4 bytes per pixel, and a tiny compressed PNG can
+  declare 40000 × 40000 pixels — gigabytes once decoded. Larger images are
+  rejected before anything decodes them (only the header is read). Defaults
+  to 100 megapixels; a collection's `max_pixels:` overrides it. `:infinity`
+  disables the check.
+
+  ## Configuration
+
+      config :phx_media_library, max_image_pixels: 50_000_000
+
+  """
+  @spec max_image_pixels() :: pos_integer() | :infinity
+  def max_image_pixels do
+    Application.get_env(:phx_media_library, :max_image_pixels, @default_max_image_pixels)
+  end
+
   # ── WebP ────────────────────────────────────────────────────────────────────
 
   @webp_defaults [enabled: false, quality: 82, keep_original: true, max_dimension: nil]

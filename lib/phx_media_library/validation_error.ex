@@ -89,6 +89,12 @@ defmodule PhxMediaLibrary.ValidationError do
     "MIME type #{inspect(mime_type)} is not accepted. Allowed types: #{Enum.join(accepted, ", ")}"
   end
 
+  defp default_message(:image_too_large, _field, pixels, max_pixels)
+       when is_integer(pixels) and is_integer(max_pixels) do
+    "Image is too large (#{format_megapixels(pixels)}, maximum allowed is " <>
+      "#{format_megapixels(max_pixels)})"
+  end
+
   defp default_message(:content_type_mismatch, _field, {detected, declared}, _constraint) do
     "File content type #{inspect(detected)} does not match declared type #{inspect(declared)}"
   end
@@ -108,17 +114,13 @@ defmodule PhxMediaLibrary.ValidationError do
   defp maybe_append_reason(parts, :validation_failed), do: parts
   defp maybe_append_reason(parts, reason), do: parts ++ [": #{reason}"]
 
-  defp format_bytes(bytes) when bytes >= 1_000_000 do
-    mb = Float.round(bytes / 1_000_000, 1)
-    "#{mb} MB"
-  end
+  defp format_megapixels(pixels), do: "#{one_decimal(pixels / 1_000_000)} megapixels"
 
-  defp format_bytes(bytes) when bytes >= 1_000 do
-    kb = Float.round(bytes / 1_000, 1)
-    "#{kb} KB"
-  end
+  defp format_bytes(bytes) when bytes >= 1_000_000, do: "#{one_decimal(bytes / 1_000_000)} MB"
+  defp format_bytes(bytes) when bytes >= 1_000, do: "#{one_decimal(bytes / 1_000)} KB"
+  defp format_bytes(bytes), do: "#{bytes} bytes"
 
-  defp format_bytes(bytes) do
-    "#{bytes} bytes"
-  end
+  # Interpolating a float can print scientific notation ("1.6e3"); this
+  # always prints plain digits with one decimal ("1600.0").
+  defp one_decimal(number), do: :erlang.float_to_binary(number / 1, decimals: 1)
 end
