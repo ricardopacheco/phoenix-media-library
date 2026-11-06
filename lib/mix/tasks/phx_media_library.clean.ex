@@ -152,12 +152,12 @@ defmodule Mix.Tasks.PhxMediaLibrary.Clean do
     # Build the set of expected paths from JSONB data
     expected_paths =
       disk_items
-      |> Enum.flat_map(&get_all_paths/1)
+      |> Enum.flat_map(&PhxMediaLibrary.Media.owned_paths/1)
       |> MapSet.new()
 
     case adapter do
       PhxMediaLibrary.Storage.Disk ->
-        check_local_disk(config, expected_paths, disk_items, force?)
+        check_local_disk(disk_name, config, expected_paths, disk_items, force?)
 
       PhxMediaLibrary.Storage.S3 ->
         Mix.shell().info("  S3 listing not yet implemented\n")
@@ -167,44 +167,47 @@ defmodule Mix.Tasks.PhxMediaLibrary.Clean do
     end
   end
 
-  defp check_local_disk(config, expected_paths, disk_items, force?) do
+  defp check_local_disk(disk_name, config, expected_paths, disk_items, force?) do
     root = config[:root]
 
-    unless File.exists?(root) do
+    if File.exists?(root) do
+      # Get all files in storage
+      storage_files =
+        root
+        |> Path.join("**/*")
+        |> Path.wildcard()
+        |> Enum.filter(&File.regular?/1)
+        |> Enum.map(&Path.relative_to(&1, root))
+        |> MapSet.new()
+
+      # Orphaned files: in storage but not expected by any JSONB record
+      orphaned = MapSet.difference(storage_files, expected_paths)
+      report_orphaned_files(orphaned, root, force?)
+
+      # Missing files: expected by JSONB but not in storage
+      storage = PhxMediaLibrary.Config.storage_adapter(disk_name)
+      missing = find_missing_files(disk_items, storage)
+      report_missing_files(missing)
+
+      Mix.shell().info("")
+    else
       Mix.shell().info("  Storage root doesn't exist: #{root}\n")
-      return(:ok)
     end
-
-    # Get all files in storage
-    storage_files =
-      root
-      |> Path.join("**/*")
-      |> Path.wildcard()
-      |> Enum.filter(&File.regular?/1)
-      |> Enum.map(&Path.relative_to(&1, root))
-      |> MapSet.new()
-
-    # Orphaned files: in storage but not expected by any JSONB record
-    orphaned = MapSet.difference(storage_files, expected_paths)
-    report_orphaned_files(orphaned, root, force?)
-
-    # Missing files: expected by JSONB but not in storage
-    storage = PhxMediaLibrary.Config.storage_adapter(disk_items |> List.first() |> Map.get(:disk))
-    missing = find_missing_files(disk_items, storage)
-    report_missing_files(missing)
-
-    Mix.shell().info("")
   end
 
   # ---------------------------------------------------------------------------
   # Orphaned files
   # ---------------------------------------------------------------------------
 
-  defp report_orphaned_files(orphaned, _root, _force?) when map_size(orphaned) == 0 do
-    Mix.shell().info("  #{IO.ANSI.green()}No orphaned files found#{IO.ANSI.reset()}")
+  defp report_orphaned_files(orphaned, root, force?) do
+    if MapSet.size(orphaned) == 0 do
+      Mix.shell().info("  #{IO.ANSI.green()}No orphaned files found#{IO.ANSI.reset()}")
+    else
+      delete_or_list_orphaned(orphaned, root, force?)
+    end
   end
 
-  defp report_orphaned_files(orphaned, root, force?) do
+  defp delete_or_list_orphaned(orphaned, root, force?) do
     Mix.shell().info("  Found #{MapSet.size(orphaned)} orphaned file(s):")
 
     Enum.each(orphaned, fn path ->
@@ -246,30 +249,4 @@ defmodule Mix.Tasks.PhxMediaLibrary.Clean do
       )
     end)
   end
-
-  # ---------------------------------------------------------------------------
-  # Path helpers
-  # ---------------------------------------------------------------------------
-
-  defp get_all_paths(item) do
-    original = PhxMediaLibrary.PathGenerator.relative_path(item, nil)
-
-    conversion_paths =
-      item.generated_conversions
-      |> Map.keys()
-      |> Enum.filter(fn key -> item.generated_conversions[key] == true end)
-      |> Enum.map(&PhxMediaLibrary.PathGenerator.relative_path(item, &1))
-
-    responsive_paths =
-      item.responsive_images
-      |> Map.values()
-      |> Enum.flat_map(fn entry ->
-        variants = Map.get(entry, "variants", [])
-        Enum.map(variants, & &1["path"]) |> Enum.filter(& &1)
-      end)
-
-    [original | conversion_paths ++ responsive_paths]
-  end
-
-  defp return(value), do: value
 end

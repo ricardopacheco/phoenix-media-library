@@ -267,46 +267,74 @@ defmodule PhxMediaLibrary.Media do
   end
 
   @doc """
+  Every storage path a media item owns: the original, its generated
+  conversions, the served WebP derivative, responsive image variants and the
+  video poster frame.
+
+  This is the single source of truth for "which files belong to this item",
+  used by `delete_files/1` and `mix phx_media_library.clean` (to tell orphans
+  from live files). Non-path entries in `responsive_images` — the blurhash
+  string, inline placeholders — are ignored.
+
+  ## Examples
+
+      iex> item = %PhxMediaLibrary.MediaItem{
+      ...>   uuid: "abc",
+      ...>   file_name: "photo.jpg",
+      ...>   owner_type: "posts",
+      ...>   owner_id: "1",
+      ...>   generated_conversions: %{"thumb" => true},
+      ...>   custom_properties: %{"webp" => "posts/1/abc/photo.webp"},
+      ...>   responsive_images: %{"blurhash" => "LKO2?V%2Tw=w"}
+      ...> }
+      iex> PhxMediaLibrary.Media.owned_paths(item)
+      ["posts/1/abc/photo.jpg", "posts/1/abc/photo_thumb.jpg", "posts/1/abc/photo.webp"]
+
+  """
+  @spec owned_paths(t() | MediaItem.t()) :: [String.t()]
+  def owned_paths(%{} = media) do
+    original = PathGenerator.relative_path(media, nil)
+
+    conversions =
+      (media.generated_conversions || %{})
+      |> Map.keys()
+      |> Enum.map(&PathGenerator.relative_path(media, &1))
+
+    webp =
+      case media.custom_properties do
+        %{"webp" => path} when is_binary(path) -> [path]
+        _ -> []
+      end
+
+    # Values may be:
+    #   - %{"variants" => [...], "placeholder" => ...}  (responsive images)
+    #   - %{"path" => "...", "url" => "..."}             (poster frame)
+    #   - "LKO2?V..."                                   (blurhash string)
+    responsive =
+      (media.responsive_images || %{})
+      |> Map.values()
+      |> Enum.flat_map(&paths_in/1)
+
+    Enum.uniq([original | conversions ++ webp ++ responsive])
+  end
+
+  defp paths_in(%{"variants" => variants} = entry) when is_list(variants),
+    do: Enum.flat_map(variants, &paths_in/1) ++ paths_in(Map.delete(entry, "variants"))
+
+  defp paths_in(%{"path" => path}) when is_binary(path), do: [path]
+  defp paths_in(_), do: []
+
+  @doc """
   Delete all files associated with a media item from storage.
 
-  Removes the original file, all generated conversions, and all
-  responsive image variants.
+  Removes every path returned by `owned_paths/1`: the original, generated
+  conversions, the WebP derivative, responsive image variants and the video
+  poster frame.
   """
   @spec delete_files(t() | MediaItem.t()) :: :ok
   def delete_files(%{disk: disk} = media) do
     storage = Config.storage_adapter(disk)
-
-    # Delete original
-    original_path = PathGenerator.relative_path(media, nil)
-    StorageWrapper.delete(storage, original_path)
-
-    # Delete conversions
-    media.generated_conversions
-    |> Map.keys()
-    |> Enum.each(fn conversion ->
-      conversion_path = PathGenerator.relative_path(media, conversion)
-      StorageWrapper.delete(storage, conversion_path)
-    end)
-
-    # Delete responsive image variants and poster frames.
-    # Values may be:
-    #   - %{"variants" => [...], "placeholder" => ...}  (responsive images)
-    #   - %{"path" => "...", "url" => "..."}             (poster frame)
-    Enum.each(media.responsive_images, fn
-      {_key, %{"variants" => variants}} when is_list(variants) ->
-        Enum.each(variants, fn
-          %{"path" => path} when is_binary(path) -> StorageWrapper.delete(storage, path)
-          _ -> :ok
-        end)
-
-      {_key, %{"path" => path}} when is_binary(path) ->
-        StorageWrapper.delete(storage, path)
-
-      _ ->
-        :ok
-    end)
-
-    :ok
+    Enum.each(owned_paths(media), &StorageWrapper.delete(storage, &1))
   end
 
   @doc """

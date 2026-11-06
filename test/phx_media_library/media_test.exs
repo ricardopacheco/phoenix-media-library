@@ -1,7 +1,8 @@
 defmodule PhxMediaLibrary.MediaTest do
   use ExUnit.Case, async: true
 
-  alias PhxMediaLibrary.Media
+  alias PhxMediaLibrary.{Media, MediaItem}
+  alias PhxMediaLibrary.Storage.Memory
 
   describe "has_conversion?/2" do
     test "returns true when conversion exists" do
@@ -278,6 +279,92 @@ defmodule PhxMediaLibrary.MediaTest do
       }
 
       assert :ok = Media.delete_files(media)
+    end
+
+    test "removes every owned file, including WebP, variants and poster" do
+      uuid = Ecto.UUID.generate()
+      base = "posts/1/#{uuid}"
+
+      item = %MediaItem{
+        uuid: uuid,
+        disk: "memory",
+        owner_type: "posts",
+        owner_id: "1",
+        file_name: "photo.jpg",
+        generated_conversions: %{"thumb" => true},
+        custom_properties: %{"webp" => "#{base}/photo.webp"},
+        responsive_images: %{
+          "original" => %{"variants" => [%{"width" => 320, "path" => "#{base}/r/320.jpg"}]},
+          "poster" => %{"path" => "#{base}/poster.jpg", "url" => "/x"},
+          "blurhash" => "LKO2?V%2Tw=w"
+        }
+      }
+
+      paths = Media.owned_paths(item)
+      Enum.each(paths, &Memory.put(&1, "x", []))
+
+      assert :ok = Media.delete_files(item)
+
+      for path <- paths do
+        assert {:error, _} = Memory.get(path)
+      end
+    end
+  end
+
+  describe "owned_paths/1" do
+    defp item(attrs) do
+      struct(
+        %MediaItem{
+          uuid: "abc",
+          file_name: "photo.jpg",
+          owner_type: "posts",
+          owner_id: "1"
+        },
+        attrs
+      )
+    end
+
+    test "lists the original and every generated conversion" do
+      assert Media.owned_paths(item(generated_conversions: %{"thumb" => true, "preview" => true})) ==
+               [
+                 "posts/1/abc/photo.jpg",
+                 "posts/1/abc/photo_preview.jpg",
+                 "posts/1/abc/photo_thumb.jpg"
+               ]
+    end
+
+    test "includes the WebP derivative recorded in custom_properties" do
+      paths = Media.owned_paths(item(custom_properties: %{"webp" => "posts/1/abc/photo.webp"}))
+      assert "posts/1/abc/photo.webp" in paths
+    end
+
+    test "includes responsive variants and the poster frame" do
+      paths =
+        Media.owned_paths(
+          item(
+            responsive_images: %{
+              "original" => %{
+                "variants" => [%{"width" => 320, "path" => "posts/1/abc/r320.jpg"}],
+                "placeholder" => %{"data_uri" => "data:image/jpeg;base64,AAAA"}
+              },
+              "poster" => %{"path" => "posts/1/abc/poster.jpg", "url" => "/uploads/x"}
+            }
+          )
+        )
+
+      assert "posts/1/abc/r320.jpg" in paths
+      assert "posts/1/abc/poster.jpg" in paths
+    end
+
+    test "ignores non-path entries such as the blurhash string" do
+      assert Media.owned_paths(item(responsive_images: %{"blurhash" => "LKO2?V%2Tw=w"})) ==
+               ["posts/1/abc/photo.jpg"]
+    end
+
+    test "tolerates nil maps" do
+      assert Media.owned_paths(
+               item(generated_conversions: nil, custom_properties: nil, responsive_images: nil)
+             ) == ["posts/1/abc/photo.jpg"]
     end
   end
 
