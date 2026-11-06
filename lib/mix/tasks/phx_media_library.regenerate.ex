@@ -133,22 +133,25 @@ defmodule Mix.Tasks.PhxMediaLibrary.Regenerate do
         )
       else
         Mix.shell().info("[#{progress}] #{item.file_name} - regenerating: #{conversion_names}")
-
-        context = %{
-          owner_module: model_module,
-          owner_id: item.owner_id,
-          collection_name: collection_name,
-          item_uuid: item.uuid
-        }
-
-        case PhxMediaLibrary.Conversions.process(context, conversions) do
-          :ok ->
-            :ok
-
-          {:error, reason} ->
-            Mix.shell().error("  #{IO.ANSI.red()}Error: #{inspect(reason)}#{IO.ANSI.reset()}")
-        end
+        regenerate_item(item, model_module, conversions)
       end
+    end
+  end
+
+  defp regenerate_item(item, model_module, conversions) do
+    context = %{
+      owner_module: model_module,
+      owner_id: item.owner_id,
+      collection_name: item.collection_name,
+      item_uuid: item.uuid
+    }
+
+    case PhxMediaLibrary.Conversions.process(context, conversions) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        Mix.shell().error("  #{IO.ANSI.red()}Error: #{inspect(reason)}#{IO.ANSI.reset()}")
     end
   end
 

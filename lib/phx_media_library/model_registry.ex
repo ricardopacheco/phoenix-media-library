@@ -98,12 +98,13 @@ defmodule PhxMediaLibrary.ModelRegistry do
 
       _ ->
         :code.all_loaded()
-        |> Enum.flat_map(fn {module, _path} ->
-          if function_exported?(module, :__media_type__, 0), do: [module], else: []
-        end)
+        |> Enum.map(&elem(&1, 0))
+        |> Enum.filter(&media_model?/1)
         |> Enum.sort()
     end
   end
+
+  defp media_model?(module), do: function_exported?(module, :__media_type__, 0)
 
   @doc """
   Returns the conversions defined on `module` for the given `collection_name`.

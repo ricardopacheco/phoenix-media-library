@@ -67,16 +67,18 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
       File.mkdir_p!(Path.dirname(full_path))
       File.write!(full_path, "x")
 
-      if create_conversion_files? do
-        Enum.each(item.generated_conversions || %{}, fn {conversion, _} ->
-          conv_path = PhxMediaLibrary.PathGenerator.full_path(item, conversion)
-          File.mkdir_p!(Path.dirname(conv_path))
-          File.write!(conv_path, "x")
-        end)
-      end
+      if create_conversion_files?, do: write_conversion_files(item)
     end
 
     post
+  end
+
+  defp write_conversion_files(item) do
+    Enum.each(item.generated_conversions || %{}, fn {conversion, _} ->
+      conv_path = PhxMediaLibrary.PathGenerator.full_path(item, conversion)
+      File.mkdir_p!(Path.dirname(conv_path))
+      File.write!(conv_path, "x")
+    end)
   end
 
   describe "run/1" do

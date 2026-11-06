@@ -266,36 +266,39 @@ defmodule PhxMediaLibrary do
   @spec get_all_media_url(Ecto.Schema.t(), atom(), [atom()]) :: [map()]
   def get_all_media_url(model, collection_name, filter \\ []) do
     case get_first_media(model, collection_name) do
-      nil ->
-        []
-
-      media ->
-        generated =
-          media.generated_conversions
-          |> Enum.filter(fn {_name, value} -> value == true end)
-          |> Enum.map(fn {name, _} -> String.to_existing_atom(name) end)
-
-        names =
-          if filter == [] do
-            generated
-          else
-            Enum.filter(generated, &(&1 in filter))
-          end
-
-        conversion_defs = get_conversion_definitions(model, collection_name)
-
-        Enum.map(names, fn name ->
-          definition = Enum.find(conversion_defs, fn c -> c.name == name end)
-
-          %{
-            name: name,
-            type: media.mime_type,
-            width: if(definition, do: definition.width),
-            height: if(definition, do: definition.height),
-            url: Media.url(media, name)
-          }
-        end)
+      nil -> []
+      media -> conversion_urls(media, model, collection_name, filter)
     end
+  end
+
+  defp conversion_urls(media, model, collection_name, filter) do
+    generated =
+      media.generated_conversions
+      |> Enum.filter(fn {_name, value} -> value == true end)
+      |> Enum.map(fn {name, _} -> String.to_existing_atom(name) end)
+
+    names =
+      if filter == [] do
+        generated
+      else
+        Enum.filter(generated, &(&1 in filter))
+      end
+
+    conversion_defs = get_conversion_definitions(model, collection_name)
+
+    Enum.map(names, &conversion_url_entry(media, &1, conversion_defs))
+  end
+
+  defp conversion_url_entry(media, name, conversion_defs) do
+    definition = Enum.find(conversion_defs, &(&1.name == name))
+
+    %{
+      name: name,
+      type: media.mime_type,
+      width: if(definition, do: definition.width),
+      height: if(definition, do: definition.height),
+      url: Media.url(media, name)
+    }
   end
 
   defp get_conversion_definitions(model, collection_name) do

@@ -197,19 +197,19 @@ defmodule PhxMediaLibrary.MediaData do
         data
 
       items when is_list(items) ->
-        updated_items =
-          Enum.map(items, fn item_map ->
-            if item_map["uuid"] == uuid do
-              item_map
-              |> MediaItem.from_map()
-              |> update_fn.()
-              |> MediaItem.to_map()
-            else
-              item_map
-            end
-          end)
-
+        updated_items = Enum.map(items, &update_matching_item(&1, uuid, update_fn))
         Map.put(data, key, updated_items)
+    end
+  end
+
+  defp update_matching_item(item_map, uuid, update_fn) do
+    if item_map["uuid"] == uuid do
+      item_map
+      |> MediaItem.from_map()
+      |> update_fn.()
+      |> MediaItem.to_map()
+    else
+      item_map
     end
   end
 

@@ -258,26 +258,26 @@ if Code.ensure_loaded?(ExAws.S3) do
           {[leftover], <<>>}
 
         chunk, buffer ->
-          data = buffer <> chunk
-
-          if byte_size(data) >= part_size do
-            # Slice out as many full parts as we can and keep the rest.
-            full_count = div(byte_size(data), part_size)
-
-            parts =
-              for i <- 0..(full_count - 1) do
-                binary_part(data, i * part_size, part_size)
-              end
-
-            rest_offset = full_count * part_size
-            rest = binary_part(data, rest_offset, byte_size(data) - rest_offset)
-
-            {parts, rest}
-          else
-            # Not enough data yet — keep accumulating.
-            {[], data}
-          end
+          split_parts(buffer <> chunk, part_size)
       end)
+    end
+
+    # Not enough data yet — keep accumulating.
+    defp split_parts(data, part_size) when byte_size(data) < part_size, do: {[], data}
+
+    # Slice out as many full parts as we can and keep the rest.
+    defp split_parts(data, part_size) do
+      full_count = div(byte_size(data), part_size)
+
+      parts =
+        for i <- 0..(full_count - 1) do
+          binary_part(data, i * part_size, part_size)
+        end
+
+      rest_offset = full_count * part_size
+      rest = binary_part(data, rest_offset, byte_size(data) - rest_offset)
+
+      {parts, rest}
     end
   end
 end

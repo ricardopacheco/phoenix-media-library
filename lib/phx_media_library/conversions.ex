@@ -52,38 +52,32 @@ defmodule PhxMediaLibrary.Conversions do
       )
 
     case media_item do
-      nil ->
-        {:error, :media_item_not_found}
+      nil -> {:error, :media_item_not_found}
+      item -> run_conversions(model, item, {collection_name, item_uuid}, conversions, processor)
+    end
+  end
 
-      item ->
-        with {:ok, source_path, temp?} <- fetch_source(item),
-             {:ok, image} <- processor.open(source_path) do
-          results =
-            Enum.map(conversions, fn conversion ->
-              process_conversion(item, image, conversion, processor)
-            end)
+  defp run_conversions(model, item, {collection_name, item_uuid}, conversions, processor) do
+    with {:ok, source_path, temp?} <- fetch_source(item),
+         {:ok, image} <- processor.open(source_path) do
+      results = Enum.map(conversions, &process_conversion(item, image, &1, processor))
 
-          if temp?, do: File.rm(source_path)
+      if temp?, do: File.rm(source_path)
 
-          # Update generated_conversions in JSONB
-          generated =
-            results
-            |> Enum.filter(&match?({:ok, _}, &1))
-            |> Enum.map(fn {:ok, name} -> {to_string(name), true} end)
-            |> Map.new()
+      # Update generated_conversions in JSONB
+      generated =
+        results
+        |> Enum.filter(&match?({:ok, _}, &1))
+        |> Map.new(fn {:ok, name} -> {to_string(name), true} end)
 
-          update_item_in_jsonb(model, collection_name, item_uuid, fn i ->
-            %{i | generated_conversions: Map.merge(i.generated_conversions, generated)}
-          end)
+      update_item_in_jsonb(model, collection_name, item_uuid, fn i ->
+        %{i | generated_conversions: Map.merge(i.generated_conversions, generated)}
+      end)
 
-          # Generate responsive images for conversions if enabled
-          maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results)
+      # Generate responsive images for conversions if enabled
+      maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results)
 
-          :ok
-        else
-          error ->
-            error
-        end
+      :ok
     end
   end
 
@@ -176,16 +170,22 @@ defmodule PhxMediaLibrary.Conversions do
       conversion_names = successful_conversion_names(results)
 
       responsive_data =
-        Enum.reduce(conversion_names, media_item.responsive_images, fn conversion_name, acc ->
-          case ResponsiveImages.generate(media_item, conversion_name) do
-            {:ok, new_data} -> Map.merge(acc, new_data)
-            _ -> acc
-          end
-        end)
+        Enum.reduce(
+          conversion_names,
+          media_item.responsive_images,
+          &merge_conversion_responsive(&2, media_item, &1)
+        )
 
       update_item_in_jsonb(fresh, collection_name, item_uuid, fn item ->
         %{item | responsive_images: responsive_data}
       end)
+    end
+  end
+
+  defp merge_conversion_responsive(acc, media_item, conversion_name) do
+    case ResponsiveImages.generate(media_item, conversion_name) do
+      {:ok, new_data} -> Map.merge(acc, new_data)
+      _ -> acc
     end
   end
 

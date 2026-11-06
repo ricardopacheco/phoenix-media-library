@@ -360,16 +360,6 @@ defmodule PhxMediaLibrary.MediaAdder do
     owner_type = Helpers.owner_type(adder.model)
     owner_id = to_string(adder.model.id)
 
-    # Build custom properties (merge source URL if present)
-    custom_props =
-      case file_info do
-        %{source_url: url} when is_binary(url) ->
-          Map.put(adder.custom_properties, "source_url", url)
-
-        _ ->
-          adder.custom_properties
-      end
-
     # Build the media item
     media_item =
       MediaItem.new(
@@ -379,7 +369,7 @@ defmodule PhxMediaLibrary.MediaAdder do
         mime_type: file_info.mime_type,
         disk: to_string(disk),
         size: file_info.size,
-        custom_properties: custom_props,
+        custom_properties: build_custom_properties(adder, file_info),
         metadata: metadata,
         order: next_order(adder.model, collection_name),
         inserted_at: DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -405,38 +395,61 @@ defmodule PhxMediaLibrary.MediaAdder do
       # Handle single file / max_files constraints
       maybe_cleanup_collection(updated_model, collection_name, media_item)
 
-      # Generate responsive images if requested
       media_item =
-        if adder.generate_responsive and image?(file_info.mime_type) do
-          generate_responsive_images(updated_model, collection_name, media_item)
-        else
-          media_item
-        end
-
-      # Generate blurhash placeholder when enabled and Image is available.
-      # Runs after responsive images so the same open/resize work could
-      # theoretically be shared; kept separate for clarity.
-      media_item =
-        if image?(file_info.mime_type) and Config.blurhash_enabled?() do
-          maybe_generate_blurhash(updated_model, collection_name, media_item, file_info.path)
-        else
-          media_item
-        end
-
-      # Generate poster frame for videos when FFmpeg is available.
-      # Must happen before temp file cleanup so the source file is still present.
-      media_item =
-        if video?(file_info.mime_type) do
-          maybe_generate_poster(updated_model, collection_name, media_item, file_info.path)
-        else
-          media_item
-        end
+        generate_derivatives(adder, updated_model, collection_name, media_item, file_info)
 
       # Cleanup temp file if needed
       if file_info.temp, do: File.rm(file_info.path)
 
       {:ok, media_item}
     end
+  end
+
+  # Merge the source URL (remote downloads) into the custom properties.
+  defp build_custom_properties(adder, %{source_url: url}) when is_binary(url) do
+    Map.put(adder.custom_properties, "source_url", url)
+  end
+
+  defp build_custom_properties(adder, _file_info), do: adder.custom_properties
+
+  # Generates responsive images, blurhash and video posters for a freshly
+  # stored item. Each step persists its own result and returns the updated
+  # item; failures are skipped so they never fail the upload.
+  defp generate_derivatives(adder, model, collection_name, media_item, file_info) do
+    # Generate responsive images if requested
+    media_item =
+      if adder.generate_responsive and image?(file_info.mime_type) do
+        generate_responsive_images(model, collection_name, media_item)
+      else
+        media_item
+      end
+
+    # Generate blurhash placeholder when enabled and Image is available.
+    # Runs after responsive images so the same open/resize work could
+    # theoretically be shared; kept separate for clarity.
+    media_item =
+      if image?(file_info.mime_type) and Config.blurhash_enabled?() do
+        maybe_generate_blurhash(model, collection_name, media_item, file_info.path)
+      else
+        media_item
+      end
+
+    # Generate poster frame for videos when FFmpeg is available.
+    # Must happen before temp file cleanup so the source file is still present.
+    if video?(file_info.mime_type) do
+      maybe_generate_poster(model, collection_name, media_item, file_info.path)
+    else
+      media_item
+    end
+  end
+
+  # Replaces the stored copy of `updated_item` in the model's JSONB.
+  defp replace_item(model, collection_name, updated_item) do
+    Helpers.update_media_data(model, fn data ->
+      MediaData.update_item(data, collection_name, updated_item.uuid, fn _item ->
+        updated_item
+      end)
+    end)
   end
 
   # Stream a file to storage while computing its SHA-256 checksum in a
@@ -516,13 +529,7 @@ defmodule PhxMediaLibrary.MediaAdder do
           })
 
         updated_item = %{media_item | responsive_images: updated_responsive}
-
-        Helpers.update_media_data(model, fn data ->
-          MediaData.update_item(data, collection_name, media_item.uuid, fn _item ->
-            updated_item
-          end)
-        end)
-
+        replace_item(model, collection_name, updated_item)
         updated_item
 
       {:error, _} ->
@@ -552,13 +559,7 @@ defmodule PhxMediaLibrary.MediaAdder do
     case ResponsiveImages.generate(media_item, nil) do
       {:ok, responsive_data} ->
         updated_item = %{media_item | responsive_images: responsive_data}
-
-        Helpers.update_media_data(model, fn data ->
-          MediaData.update_item(data, collection_name, media_item.uuid, fn _item ->
-            updated_item
-          end)
-        end)
-
+        replace_item(model, collection_name, updated_item)
         updated_item
 
       {:error, _reason} ->
@@ -574,13 +575,7 @@ defmodule PhxMediaLibrary.MediaAdder do
           Map.put(media_item.responsive_images || %{}, "blurhash", hash)
 
         updated_item = %{media_item | responsive_images: updated_responsive}
-
-        Helpers.update_media_data(model, fn data ->
-          MediaData.update_item(data, collection_name, media_item.uuid, fn _item ->
-            updated_item
-          end)
-        end)
-
+        replace_item(model, collection_name, updated_item)
         updated_item
 
       {:error, _} ->
@@ -647,15 +642,17 @@ defmodule PhxMediaLibrary.MediaAdder do
       Enum.each(excess_items, &Media.delete_files/1)
 
       # Single DB write: remove all excess items from JSONB at once
-      uuids_to_remove = Enum.map(excess_items, & &1.uuid)
-
-      Helpers.update_media_data(model, fn data ->
-        Enum.reduce(uuids_to_remove, data, fn uuid, acc ->
-          {_removed, updated} = MediaData.remove_item(acc, collection_name, uuid)
-          updated
-        end)
-      end)
+      remove_items(model, collection_name, Enum.map(excess_items, & &1.uuid))
     end
+  end
+
+  defp remove_items(model, collection_name, uuids) do
+    Helpers.update_media_data(model, fn data ->
+      Enum.reduce(uuids, data, fn uuid, acc ->
+        {_removed, updated} = MediaData.remove_item(acc, collection_name, uuid)
+        updated
+      end)
+    end)
   end
 
   defp generate_uuid, do: Ecto.UUID.generate()

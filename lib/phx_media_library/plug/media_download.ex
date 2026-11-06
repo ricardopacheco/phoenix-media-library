@@ -152,19 +152,12 @@ if Code.ensure_loaded?(Plug.Conn) do
         Keyword.get(disk_config, :secret_key_base) ||
           Application.get_env(:phx_media_library, :secret_key_base)
 
-      if is_nil(secret) do
-        {:error, :forbidden}
+      with false <- is_nil(secret),
+           {expires_at, ""} <- Integer.parse(exp_str),
+           :ok <- SignedUrl.verify(path, token, expires_at, secret) do
+        :ok
       else
-        case Integer.parse(exp_str) do
-          {expires_at, ""} ->
-            case SignedUrl.verify(path, token, expires_at, secret) do
-              :ok -> :ok
-              {:error, _reason} -> {:error, :forbidden}
-            end
-
-          _invalid ->
-            {:error, :forbidden}
-        end
+        _invalid -> {:error, :forbidden}
       end
     end
 

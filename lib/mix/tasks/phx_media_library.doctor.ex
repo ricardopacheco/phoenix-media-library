@@ -128,24 +128,27 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
     rows = repo.all(module)
 
     Enum.reduce(rows, %{missing: [], missing_conversions: []}, fn row, acc ->
-      data = Map.get(row, column) || %{}
-      owner_id = to_string(row.id)
-
-      MediaData.collection_names(data)
-      |> Enum.reduce(acc, fn collection, inner_acc ->
-        items =
-          MediaData.get_collection(data, collection,
-            owner_type: type,
-            owner_id: owner_id
-          )
-
-        Enum.reduce(items, inner_acc, fn item, item_acc ->
-          item_acc
-          |> check_original(item, module, row, collection)
-          |> check_conversions(item, module, row, collection)
-        end)
-      end)
+      check_row_files(acc, row, module, type, column)
     end)
+  end
+
+  defp check_row_files(acc, row, module, type, column) do
+    data = Map.get(row, column) || %{}
+    owner_id = to_string(row.id)
+
+    data
+    |> MediaData.collection_names()
+    |> Enum.reduce(acc, fn collection, collection_acc ->
+      data
+      |> MediaData.get_collection(collection, owner_type: type, owner_id: owner_id)
+      |> Enum.reduce(collection_acc, &check_item_files(&2, &1, module, row, collection))
+    end)
+  end
+
+  defp check_item_files(acc, item, module, row, collection) do
+    acc
+    |> check_original(item, module, row, collection)
+    |> check_conversions(item, module, row, collection)
   end
 
   defp check_original(acc, item, module, row, collection) do
@@ -174,31 +177,34 @@ defmodule Mix.Tasks.PhxMediaLibrary.Doctor do
   end
 
   defp check_conversions(acc, item, module, row, collection) do
-    Map.keys(item.generated_conversions || %{})
-    |> Enum.reduce(acc, fn conversion, conv_acc ->
-      case PathGenerator.full_path(item, conversion) do
-        nil ->
-          conv_acc
+    (item.generated_conversions || %{})
+    |> Map.keys()
+    |> Enum.reduce(acc, &check_conversion(&2, item, &1, module, row, collection))
+  end
 
-        full_path ->
-          if File.exists?(full_path) do
-            conv_acc
-          else
-            entry = %{
-              module: module,
-              row_id: row.id,
-              collection: collection,
-              uuid: item.uuid,
-              file_name: item.file_name,
-              conversion: conversion,
-              disk: item.disk,
-              path: full_path
-            }
+  defp check_conversion(acc, item, conversion, module, row, collection) do
+    case PathGenerator.full_path(item, conversion) do
+      nil ->
+        acc
 
-            %{conv_acc | missing_conversions: [entry | conv_acc.missing_conversions]}
-          end
-      end
-    end)
+      full_path ->
+        if File.exists?(full_path) do
+          acc
+        else
+          entry = %{
+            module: module,
+            row_id: row.id,
+            collection: collection,
+            uuid: item.uuid,
+            file_name: item.file_name,
+            conversion: conversion,
+            disk: item.disk,
+            path: full_path
+          }
+
+          %{acc | missing_conversions: [entry | acc.missing_conversions]}
+        end
+    end
   end
 
   # ---------------------------------------------------------------------------
