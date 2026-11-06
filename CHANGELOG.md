@@ -54,6 +54,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >   --id-type`** (upstream 0.7.0). There is no `mediable_id` column to type:
 >   parents with UUID, integer or string primary keys work without
 >   configuration.
+> - **`mix phx_media_library.regenerate_webp`** (upstream 0.8.0; deprecated
+>   upstream in 0.9.0 and removed in 0.10.0 in favour of `mix
+>   phx_media_library.doctor --rebuild --only webp`). Backfilling WebP for
+>   existing media is left to the doctor work of those versions.
 >
 > The CHANGELOG below preserves upstream's release history verbatim. Where
 > a feature in those entries is in the not-ported list above, assume the
@@ -181,6 +185,114 @@ feature is not ported (see the not-ported list above):
 - `AsyncProcessor.context` types `owner_id` as `term()` (was `String.t()`),
   matching what callers actually pass.
 - Version bumped to `0.7.0`, mirroring upstream's numbering.
+
+### v0.8.0 upstream sync (6 commits)
+
+Upstream `v0.8.0` (`a988d55`…`43b7a08`) adds WebP serving, an inline
+processor and two conversion fixes. Ported and adapted to JSONB:
+
+- **WebP** (`a988d55`, `4aeb908`, `cce19b2`, `97db35d`) — `webp:` on
+  collections plus `config :phx_media_library, :webp`,
+  `Config.webp_config/0`, `Config.resolve_webp/1`, `PhxMediaLibrary.Webp`.
+  Same storage as upstream (`custom_properties["webp"]`, sibling `.webp`
+  file) and the same `keep_original: false` ordering (conversions first,
+  synchronously; the original is deleted last). Differences:
+  - the WebP is generated before the item's first JSONB write and goes into
+    it, instead of a separate update;
+  - with `keep_original: false` the original is deleted only when every
+    conversion was recorded on the item (upstream deletes it regardless
+    until 0.8.4);
+  - delete, `mix clean` and `mix doctor` account for the WebP from the start
+    (upstream fixed those in 0.8.3/0.8.4/0.9.0); `doctor` and `clean` don't
+    report an original replaced by its WebP as missing, so `doctor --fix`
+    never offers to drop such items;
+  - **GIFs are not transcoded** — an animated GIF would keep only its first
+    frame (upstream converts them).
+- **`AsyncProcessor.Inline`** (`43b7a08`) — the in-process processor this fork
+  already had as `PhxMediaLibrary.SyncProcessor`, under upstream's name.
+  `SyncProcessor` delegates to it and is deprecated. `process_sync/2` returns
+  the conversion result (upstream: from 0.8.4).
+- **Conversions survive a deleted owner** (`43b7a08`) — `Conversions.process/2`
+  returns `{:error, :owner_not_found}` instead of raising when the parent
+  record was deleted after enqueueing; the Oban worker discards those jobs.
+- **Conversions without a local source** (`d57d3bd`) — not ported: this fork
+  already downloads remote originals (S3, memory) to a temp file and converts
+  them (upstream: from 0.8.4).
+- **Test suite** (`43b7a08`) — `ExUnit.start(capture_log: true)`.
+- **`Config.resolve_responsive/1` and keyword `responsive:`** — deferred to the
+  0.8.1 sync, where upstream starts using them.
+- **`mix phx_media_library.regenerate_webp`** — not ported (see the not-ported
+  list above).
+
+Fork fixes made along the way, ahead of the upstream versions that carry
+them:
+
+- **`mix phx_media_library.clean`** crashed (`BadMapError`) on any item with a
+  blurhash, treated video posters as orphans, never printed "No orphaned
+  files" (`map_size/1` on a `MapSet`, upstream 0.8.3), crashed on a disk with
+  files but no media, and didn't stop when the storage root was missing.
+  Fixed, with tests (the task had none). New `Media.owned_paths/1`
+  (upstream 0.8.3) is the single list of an item's files, used by
+  `Media.delete_files/1` and `clean`.
+- **Width-only and height-only conversions** (e.g. `convert :preview,
+  width: 800`) always failed — `Image.thumbnail/3` rejects `height: nil` —
+  and were silently skipped. They now scale to the given side and keep the
+  aspect ratio (upstream 0.8.4).
+- Version bumped to `0.8.0`, mirroring upstream's numbering.
+
+## [0.8.0] - 2026-08-20
+
+### Added
+
+- **WebP conversion** — a collection can transcode raster/HEIC uploads to WebP
+  for faster loads and better SEO. Opt in globally or per-collection; every knob
+  is overridable per-collection:
+
+  ```elixir
+  config :phx_media_library,
+    webp: [enabled: false, quality: 82, keep_original: true]
+
+  media_collections do
+    collection(:photos, webp: true)                        # jpg/png/HEIC → served as WebP
+    collection(:hero,   webp: [quality: 90, keep_original: false])
+  end
+  ```
+
+  With `keep_original: true` (default) the source is kept; `false` removes it —
+  but only **after** conversions run (conversions derive from the source, so
+  they are generated first and the deletion is strictly last; safe to combine
+  with named conversions). Either way the WebP is served automatically by
+  `url/2` via `custom_properties["webp"]`, so `<img src>` needs no change.
+  Requires the optional `:image` (libvips) dependency — features no-op
+  gracefully when it is absent, and any conversion error falls back to serving
+  the original. **iPhone HEIC/HEIF** uploads are converted to browser-viewable
+  WebP.
+- **`mix phx_media_library.regenerate_webp`** — re-derive WebP from each media's
+  original using the current config (run after changing `quality`). Media stored
+  with `keep_original: false` have no source and are skipped with a warning.
+- `PhxMediaLibrary.Config.resolve_webp/1` and `resolve_responsive/1` — resolve
+  effective per-collection settings (per-collection over global over defaults).
+- `PhxMediaLibrary.AsyncProcessor.Inline` — a synchronous conversion processor
+  (runs conversions inline, no `Task.Supervisor`); handy for tests, scripts, or
+  small apps. Enable with
+  `config :phx_media_library, async_processor: PhxMediaLibrary.AsyncProcessor.Inline`.
+
+### Fixed
+
+- Conversions are now resilient to their media changing between enqueue and
+  processing: `Conversions.process/2` re-reads the current row (skipping if the
+  media was deleted), avoiding `Ecto.StaleEntryError` on the async path.
+- Conversions no longer crash (`Image.open(nil)` → `Enumerable not implemented`)
+  on disks without a local source path (`:memory`, S3): `process/2` and
+  `process_single/2` skip (debug-logged) when `full_path` is `nil`.
+
+### Notes
+
+- WebP is **opt-in**; upgrading from 0.7.x changes nothing until a collection
+  enables it.
+- With `keep_original: false`, `file_name`/`mime_type` still describe the source
+  (the WebP is served via `custom_properties["webp"]`); the source file is
+  removed after conversions. `regenerate_webp` skips such media (no source).
 
 ## [0.7.0] - 2026-08-09
 
