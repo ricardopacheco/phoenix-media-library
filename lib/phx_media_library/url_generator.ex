@@ -34,6 +34,11 @@ defmodule PhxMediaLibrary.UrlGenerator do
     `Content-Disposition` header when `:download` is `true`. Defaults to the
     media item's `file_name`.
 
+  - `:width` — `pos_integer` — return the smallest responsive variant at least
+    this wide (the widest one when none is), so a fixed-size slot never
+    downloads the full-size file. Media without responsive variants for the
+    requested conversion return their regular URL.
+
   ## CDN Cache-Busting
 
   When assets are served through a CDN you typically want far-future
@@ -90,7 +95,7 @@ defmodule PhxMediaLibrary.UrlGenerator do
   which serves the file with `Content-Disposition: attachment`.
   """
 
-  alias PhxMediaLibrary.{Config, PathGenerator, StorageWrapper, Webp}
+  alias PhxMediaLibrary.{Config, Helpers, PathGenerator, StorageWrapper, Webp}
 
   @doc """
   Generate a URL for a media item.
@@ -106,10 +111,11 @@ defmodule PhxMediaLibrary.UrlGenerator do
   """
   @spec url(map(), atom() | nil, keyword()) :: String.t()
   def url(media, conversion \\ nil, opts \\ []) do
-    {cache_bust, adapter_opts} = Keyword.pop(opts, :cache_bust, false)
+    {cache_bust, opts} = Keyword.pop(opts, :cache_bust, false)
+    {width, adapter_opts} = Keyword.pop(opts, :width)
 
     storage = Config.storage_adapter(media.disk)
-    relative_path = served_path(media, conversion)
+    relative_path = variant_path(media, conversion, width) || served_path(media, conversion)
 
     base_url = StorageWrapper.url(storage, relative_path, adapter_opts)
 
@@ -120,6 +126,32 @@ defmodule PhxMediaLibrary.UrlGenerator do
   # conversions resolve normally.
   defp served_path(media, nil), do: Webp.path(media) || PathGenerator.relative_path(media, nil)
   defp served_path(media, conversion), do: PathGenerator.relative_path(media, conversion)
+
+  # `width:` picks the smallest responsive variant at least that wide, else
+  # the widest one. `nil` when there are no variants for the conversion, so
+  # the caller falls back to the regular served path.
+  defp variant_path(%{responsive_images: responsive}, conversion, width)
+       when is_map(responsive) and is_integer(width) and width > 0 do
+    variants =
+      case Map.get(responsive, Helpers.conversion_key(conversion)) do
+        %{"variants" => variants} when is_list(variants) ->
+          variants
+          |> Enum.filter(
+            &match?(%{"width" => w, "path" => p} when is_integer(w) and is_binary(p), &1)
+          )
+          |> Enum.sort_by(& &1["width"])
+
+        _ ->
+          []
+      end
+
+    case Enum.find(variants, &(&1["width"] >= width)) || List.last(variants) do
+      %{"path" => path} -> path
+      nil -> nil
+    end
+  end
+
+  defp variant_path(_media, _conversion, _width), do: nil
 
   @doc """
   Generate a URL for a specific path (used for responsive images / poster

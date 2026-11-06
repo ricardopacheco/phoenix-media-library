@@ -169,6 +169,13 @@ defmodule PhxMediaLibrary.ResponsiveImagesTest do
       assert Enum.all?(files, &(&1 =~ ".webp "))
     end
 
+    test "url(width:) returns a WebP variant", %{post: post} do
+      assert {:ok, media} = add(post, :responsive_webp)
+
+      assert PhxMediaLibrary.url(media, nil, width: 200) =~ ~r{/responsive/[^/]+_320w\.webp$}
+      assert PhxMediaLibrary.url(media, nil, width: 2000) == PhxMediaLibrary.url(media)
+    end
+
     test "without WebP, variants keep the original format", %{post: post} do
       assert {:ok, media} = add(post, :responsive_plain)
 

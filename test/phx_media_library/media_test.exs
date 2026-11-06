@@ -72,6 +72,71 @@ defmodule PhxMediaLibrary.MediaTest do
     end
   end
 
+  describe "url/3 with width:" do
+    defp with_variants do
+      %MediaItem{
+        uuid: "abc",
+        disk: "memory",
+        file_name: "photo.jpg",
+        owner_type: "posts",
+        owner_id: "1",
+        checksum: "0123456789abcdef",
+        generated_conversions: %{"preview" => true},
+        responsive_images: %{
+          "original" => %{
+            "variants" => [
+              %{"width" => 1000, "height" => 500, "path" => "posts/1/abc/photo.jpg"},
+              %{
+                "width" => 160,
+                "height" => 80,
+                "path" => "posts/1/abc/responsive/photo_160w.jpg"
+              },
+              %{
+                "width" => 320,
+                "height" => 160,
+                "path" => "posts/1/abc/responsive/photo_320w.jpg"
+              }
+            ],
+            "placeholder" => %{"data_uri" => "data:image/jpeg;base64,AAAA"}
+          },
+          "preview" => %{
+            "variants" => [
+              %{"width" => 160, "path" => "posts/1/abc/responsive/photo_preview_160w.jpg"},
+              %{"width" => 800, "path" => "posts/1/abc/photo_preview.jpg"}
+            ]
+          },
+          "blurhash" => "LKO2?V%2Tw=w"
+        }
+      }
+    end
+
+    test "returns the smallest variant at least that wide" do
+      assert Media.url(with_variants(), nil, width: 100) =~ "/responsive/photo_160w.jpg"
+      assert Media.url(with_variants(), nil, width: 160) =~ "/responsive/photo_160w.jpg"
+      assert Media.url(with_variants(), nil, width: 200) =~ "/responsive/photo_320w.jpg"
+    end
+
+    test "returns the widest variant when none is wide enough" do
+      assert Media.url(with_variants(), nil, width: 5000) =~ "/abc/photo.jpg"
+    end
+
+    test "uses the conversion's own variants" do
+      assert Media.url(with_variants(), :preview, width: 100) =~ "photo_preview_160w.jpg"
+      assert Media.url(with_variants(), :preview, width: 500) =~ "/abc/photo_preview.jpg"
+    end
+
+    test "falls back to the regular URL without variants" do
+      item = %{with_variants() | responsive_images: %{}}
+      assert Media.url(item, nil, width: 320) == Media.url(item)
+      assert Media.url(with_variants(), :thumb, width: 320) == Media.url(with_variants(), :thumb)
+    end
+
+    test "combines with cache_bust" do
+      url = Media.url(with_variants(), nil, width: 200, cache_bust: true)
+      assert url =~ "/responsive/photo_320w.jpg?v=01234567"
+    end
+  end
+
   describe "srcset/2" do
     test "returns nil when no responsive images exist" do
       media = %Media{

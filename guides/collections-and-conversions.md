@@ -360,6 +360,18 @@ the variants are WebP too and the full-size entry is the WebP derivative, so
 the whole `srcset` is WebP. The global `enabled` doesn't turn on
 variants of the original for every collection — use `responsive:` for that.
 
+For a fixed-size slot (a cart thumbnail, a search result), ask for a single
+variant instead of a `srcset`. `width:` returns the smallest variant at least
+that wide, the widest one when none is, or the regular URL for media without
+variants:
+
+```elixir
+PhxMediaLibrary.url(media, nil, width: 320)
+PhxMediaLibrary.url(media, :preview, width: 320)   # a conversion's variants
+PhxMediaLibrary.get_first_media_url(product, :photos, width: 320)
+# => "/uploads/products/1/<uuid>/responsive/photo_320w.webp"
+```
+
 **Conversions** get their own variants when their collection's `responsive:`
 is on, or — when the collection doesn't set it — when the global `enabled`
 is `true`. They use the collection's widths, so with

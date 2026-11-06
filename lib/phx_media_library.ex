@@ -320,7 +320,15 @@ defmodule PhxMediaLibrary do
   Get the URL for a media item, optionally for a specific conversion.
 
   Accepts the same options as `PhxMediaLibrary.UrlGenerator.url/3`, including
-  `cache_bust: true`, `signed: true`, `download: true`, and `expires_in`.
+  `cache_bust: true`, `signed: true`, `download: true`, `expires_in` and
+  `width:` (the smallest responsive variant at least that wide).
+
+  ## Examples
+
+      PhxMediaLibrary.url(media)
+      PhxMediaLibrary.url(media, :thumb)
+      PhxMediaLibrary.url(media, nil, width: 320)
+
   """
   @spec url(MediaItem.t() | Media.t(), atom() | nil, keyword()) :: String.t()
   defdelegate url(media, conversion \\ nil, opts \\ []), to: Media
