@@ -69,6 +69,9 @@ defmodule PhxMediaLibrary.MixProject do
 
   defp dialyzer do
     [
+      # Mix tasks call Mix.shell/0, Mix.Task.run/1, ...: add :mix to the PLT
+      # instead of ignoring those warnings.
+      plt_add_apps: [:mix],
       ignore_warnings: ".dialyzer_ignore.exs"
     ]
   end

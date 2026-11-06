@@ -287,7 +287,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Stats do
   # ---------------------------------------------------------------------------
 
   defp lpad(str, width), do: String.pad_trailing(to_string(str || ""), width)
-  defp rpad(str, width), do: String.pad_leading(to_string(str || ""), width)
+  defp rpad(value, width), do: String.pad_leading(to_string(value), width)
 
   defp format_size(0), do: "0 B"
 
