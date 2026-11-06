@@ -122,7 +122,7 @@ from GitHub, pinned to a release tag:
 ```elixir
 def deps do
   [
-    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.6.1"},
+    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.7.0"},
 
     # Optional: Image processing (requires libvips)
     {:image, "~> 0.54"},
