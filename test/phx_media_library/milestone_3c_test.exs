@@ -540,6 +540,43 @@ defmodule PhxMediaLibrary.Milestone3cTest do
     after
       :telemetry.detach("test-external-add-#{inspect(make_ref())}")
     end
+
+    test "enforces single_file like regular uploads" do
+      post = create_post!()
+
+      for name <- ~w(first.jpg second.jpg) do
+        post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+        {:ok, _media} =
+          PhxMediaLibrary.complete_external_upload(
+            post,
+            :avatar,
+            "posts/#{post.id}/#{Ecto.UUID.generate()}/#{name}",
+            filename: name,
+            content_type: "image/jpeg",
+            size: 10
+          )
+      end
+
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+      assert [%{file_name: "second.jpg"}] = PhxMediaLibrary.get_media(post, :avatar)
+    end
+
+    test "sanitizes the client filename" do
+      post = create_post!()
+
+      {:ok, media} =
+        PhxMediaLibrary.complete_external_upload(
+          post,
+          :images,
+          "posts/#{post.id}/#{Ecto.UUID.generate()}/x.jpg",
+          filename: "../../x.jpg",
+          content_type: "image/jpeg",
+          size: 10
+        )
+
+      assert media.file_name == "x.jpg"
+    end
   end
 
   # =========================================================================

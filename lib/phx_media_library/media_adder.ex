@@ -384,7 +384,7 @@ defmodule PhxMediaLibrary.MediaAdder do
         size: file_info.size,
         custom_properties: build_custom_properties(adder, file_info),
         metadata: metadata,
-        order: next_order(adder.model, collection_name),
+        order: Helpers.next_order(adder.model, collection_name),
         inserted_at: DateTime.utc_now() |> DateTime.to_iso8601(),
         # Virtual fields for path generation
         owner_type: owner_type,
@@ -418,7 +418,7 @@ defmodule PhxMediaLibrary.MediaAdder do
         end
 
       # Handle single file / max_files constraints
-      maybe_cleanup_collection(updated_model, collection_name, media_item)
+      Helpers.enforce_collection_limits(updated_model, collection_name, media_item)
 
       media_item =
         generate_derivatives(adder, updated_model, collection_name, media_item, file_info)
@@ -656,7 +656,7 @@ defmodule PhxMediaLibrary.MediaAdder do
   # original — run synchronously first, and the original is deleted last,
   # only once every conversion exists (so a failed one can be retried).
   defp process_conversions(model, media_item, collection_name) do
-    conversions = get_conversions_for(model, collection_name)
+    conversions = Helpers.conversions(model, collection_name)
     context = conversion_context(model, media_item, collection_name)
 
     cond do
@@ -730,72 +730,7 @@ defmodule PhxMediaLibrary.MediaAdder do
     StorageWrapper.delete(storage, PathGenerator.relative_path(media_item, nil))
   end
 
-  defp next_order(model, collection_name) do
-    data = Helpers.media_data(model)
-    MediaData.count(data, collection_name)
-  end
-
-  defp maybe_cleanup_collection(model, collection_name, new_item) do
-    excess_items =
-      case Helpers.collection_config(model, collection_name) do
-        %Collection{single_file: true} ->
-          model
-          |> Helpers.media_data()
-          |> MediaData.get_collection(collection_name,
-            owner_type: new_item.owner_type,
-            owner_id: new_item.owner_id
-          )
-          |> Enum.reject(&(&1.uuid == new_item.uuid))
-
-        %Collection{max_files: max} when is_integer(max) and max > 0 ->
-          items =
-            model
-            |> Helpers.media_data()
-            |> MediaData.get_collection(collection_name,
-              owner_type: new_item.owner_type,
-              owner_id: new_item.owner_id
-            )
-
-          if length(items) > max do
-            Enum.take(items, length(items) - max)
-          else
-            []
-          end
-
-        _ ->
-          []
-      end
-
-    if excess_items != [] do
-      # Delete files from storage for all excess items
-      Enum.each(excess_items, &Media.delete_files/1)
-
-      # Single DB write: remove all excess items from JSONB at once
-      remove_items(model, collection_name, Enum.map(excess_items, & &1.uuid))
-    end
-  end
-
-  defp remove_items(model, collection_name, uuids) do
-    Helpers.update_media_data(model, fn data ->
-      Enum.reduce(uuids, data, fn uuid, acc ->
-        {_removed, updated} = MediaData.remove_item(acc, collection_name, uuid)
-        updated
-      end)
-    end)
-  end
-
   defp generate_uuid, do: Ecto.UUID.generate()
-
-  defp get_conversions_for(model, collection_name) do
-    module = model.__struct__
-    Code.ensure_loaded(module)
-
-    if function_exported?(module, :get_media_conversions, 1) do
-      module.get_media_conversions(collection_name)
-    else
-      []
-    end
-  end
 
   defp source_type({:url, _, _}), do: :url
   defp source_type({:url, _}), do: :url

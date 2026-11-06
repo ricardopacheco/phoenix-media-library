@@ -2,7 +2,7 @@ defmodule PhxMediaLibrary.Helpers do
   @moduledoc false
   # Internal helpers shared across PhxMediaLibrary modules.
 
-  alias PhxMediaLibrary.Config
+  alias PhxMediaLibrary.{Collection, Config, MediaData}
 
   # From get_owner_type/1 (duplicated in phx_media_library.ex, media_adder.ex, conversions.ex)
   def owner_type(model) do
@@ -53,15 +53,87 @@ defmodule PhxMediaLibrary.Helpers do
   # From sanitize_name/1 (duplicated in phx_media_library.ex, media_adder.ex)
   def sanitize_name(filename), do: PhxMediaLibrary.FileName.slug(filename)
 
-  # From get_collection_config/2 (duplicated in phx_media_library.ex, media_adder.ex, live_upload.ex)
+  # The model's Collection for `collection_name` (atom or string), or nil.
+  # Strings are matched against the declared names, never turned into atoms
+  # (collection names read back from JSONB are strings).
   def collection_config(model, collection_name) do
     module = model.__struct__
     Code.ensure_loaded(module)
 
-    if function_exported?(module, :get_media_collection, 1) do
-      module.get_media_collection(collection_name)
+    cond do
+      is_atom(collection_name) and function_exported?(module, :get_media_collection, 1) ->
+        module.get_media_collection(collection_name)
+
+      function_exported?(module, :media_collections, 0) ->
+        name = to_string(collection_name)
+        Enum.find(module.media_collections(), &(to_string(&1.name) == name))
+
+      true ->
+        nil
+    end
+  end
+
+  # The model's conversion definitions for a collection.
+  def conversions(model, collection_name) do
+    module = model.__struct__
+    Code.ensure_loaded(module)
+
+    if function_exported?(module, :get_media_conversions, 1) do
+      module.get_media_conversions(collection_name)
     else
-      nil
+      []
+    end
+  end
+
+  # The `order` for the next item added to a collection.
+  def next_order(model, collection_name) do
+    model |> media_data() |> MediaData.count(collection_name)
+  end
+
+  # Applies the collection's `single_file` / `max_files` limits after
+  # `new_item` was added: deletes the files of the excess items (oldest first)
+  # and removes them from the JSONB in a single write. `max_files: 0` means
+  # no limit.
+  def enforce_collection_limits(model, collection_name, new_item) do
+    case excess_items(model, collection_name, new_item) do
+      [] ->
+        :ok
+
+      excess ->
+        Enum.each(excess, &PhxMediaLibrary.Media.delete_files/1)
+        uuids = Enum.map(excess, & &1.uuid)
+        update_media_data(model, &remove_items(&1, collection_name, uuids))
+        :ok
+    end
+  end
+
+  defp remove_items(data, collection_name, uuids) do
+    Enum.reduce(uuids, data, fn uuid, acc ->
+      {_removed, updated} = MediaData.remove_item(acc, collection_name, uuid)
+      updated
+    end)
+  end
+
+  defp excess_items(model, collection_name, new_item) do
+    items = fn ->
+      model
+      |> media_data()
+      |> MediaData.get_collection(collection_name,
+        owner_type: new_item.owner_type,
+        owner_id: new_item.owner_id
+      )
+    end
+
+    case collection_config(model, collection_name) do
+      %Collection{single_file: true} ->
+        Enum.reject(items.(), &(&1.uuid == new_item.uuid))
+
+      %Collection{max_files: max} when is_integer(max) and max > 0 ->
+        all = items.()
+        Enum.take(all, max(length(all) - max, 0))
+
+      _ ->
+        []
     end
   end
 

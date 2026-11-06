@@ -177,8 +177,7 @@ defmodule PhxMediaLibrary.Conversions do
   end
 
   defp maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results) do
-    collection_atom = safe_to_atom(collection_name)
-    collection_config = Helpers.collection_config(model, collection_atom)
+    collection_config = Helpers.collection_config(model, collection_name)
 
     if Config.responsive_for_collection?(collection_config) do
       # The collection's `responsive: [widths: ...]` applies to conversions too
@@ -186,14 +185,6 @@ defmodule PhxMediaLibrary.Conversions do
       opts = [widths: Config.resolve_responsive(override)[:widths]]
       generate_responsive_for_conversions(model, {collection_name, item_uuid}, results, opts)
     end
-  end
-
-  defp safe_to_atom(value) when is_atom(value), do: value
-
-  defp safe_to_atom(value) when is_binary(value) do
-    String.to_existing_atom(value)
-  rescue
-    ArgumentError -> String.to_atom(value)
   end
 
   defp generate_responsive_for_conversions(model, {collection_name, item_uuid}, results, opts) do

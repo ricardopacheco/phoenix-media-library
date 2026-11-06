@@ -309,7 +309,7 @@ defmodule PhxMediaLibrary do
         Enum.filter(generated, &(&1 in filter))
       end
 
-    conversion_defs = get_conversion_definitions(model, collection_name)
+    conversion_defs = Helpers.conversions(model, collection_name)
 
     Enum.map(names, &conversion_url_entry(media, &1, conversion_defs))
   end
@@ -324,17 +324,6 @@ defmodule PhxMediaLibrary do
       height: if(definition, do: definition.height),
       url: Media.url(media, name)
     }
-  end
-
-  defp get_conversion_definitions(model, collection_name) do
-    module = model.__struct__
-    Code.ensure_loaded(module)
-
-    if function_exported?(module, :get_media_conversions, 1) do
-      module.get_media_conversions(collection_name)
-    else
-      []
-    end
   end
 
   # ---------------------------------------------------------------------------
@@ -774,7 +763,7 @@ defmodule PhxMediaLibrary do
         size: size,
         custom_properties: custom_properties,
         metadata: %{},
-        order: next_order(model, collection_name),
+        order: Helpers.next_order(model, collection_name),
         checksum: checksum,
         checksum_algorithm: if(checksum, do: checksum_algorithm, else: "sha256"),
         inserted_at: DateTime.utc_now() |> DateTime.to_iso8601(),
@@ -788,9 +777,13 @@ defmodule PhxMediaLibrary do
       %{collection: collection_name, source_type: :external, model: model},
       fn ->
         # Add to JSONB
-        Helpers.update_media_data(model, fn data ->
-          MediaData.put_item(data, collection_name, media_item)
-        end)
+        updated_model =
+          Helpers.update_media_data(model, fn data ->
+            MediaData.put_item(data, collection_name, media_item)
+          end)
+
+        # Same single_file / max_files rules as regular uploads
+        Helpers.enforce_collection_limits(updated_model, collection_name, media_item)
 
         # Trigger conversions
         maybe_process_conversions(model, media_item, collection_name)
@@ -805,11 +798,6 @@ defmodule PhxMediaLibrary do
   # Private helpers
   # ---------------------------------------------------------------------------
 
-  defp next_order(model, collection_name) do
-    data = Helpers.media_data(model)
-    MediaData.count(data, collection_name)
-  end
-
   defp maybe_add_size_constraint(presigned_opts, opts) do
     case Keyword.get(opts, :max_size) do
       nil -> presigned_opts
@@ -818,15 +806,7 @@ defmodule PhxMediaLibrary do
   end
 
   defp maybe_process_conversions(model, media_item, collection_name) do
-    module = model.__struct__
-    Code.ensure_loaded(module)
-
-    conversions =
-      if function_exported?(module, :get_media_conversions, 1) do
-        module.get_media_conversions(collection_name)
-      else
-        []
-      end
+    conversions = Helpers.conversions(model, collection_name)
 
     if conversions != [] do
       context = %{
