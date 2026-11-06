@@ -8,6 +8,8 @@ defmodule PhxMediaLibrary.Conversions do
   `generated_conversions` back in the JSONB.
   """
 
+  require Logger
+
   alias PhxMediaLibrary.{
     Config,
     Conversion,
@@ -27,6 +29,14 @@ defmodule PhxMediaLibrary.Conversions do
   - `:owner_id` - The ID of the parent record
   - `:collection_name` - The collection name
   - `:item_uuid` - The UUID of the media item
+
+  The source is read from local disk, or fetched into a temporary file for
+  storage without a local path (S3, memory). Conversions that succeed are
+  recorded even when others fail.
+
+  Returns `:ok` when every conversion succeeded, otherwise
+  `{:error, {:conversions_failed, failures}}` (logged as a warning), so job
+  runners such as Oban retry.
 
   The parent record is re-read, since it may have changed between enqueueing
   and processing. Returns `{:error, :owner_not_found}` when the parent record
@@ -65,26 +75,46 @@ defmodule PhxMediaLibrary.Conversions do
   end
 
   defp run_conversions(model, item, {collection_name, item_uuid}, conversions, processor) do
-    with {:ok, source_path, temp?} <- fetch_source(item),
-         {:ok, image} <- processor.open(source_path) do
-      results = Enum.map(conversions, &process_conversion(item, image, &1, processor))
+    with {:ok, source_path, temp?} <- fetch_source(item) do
+      try do
+        with {:ok, image} <- processor.open(source_path) do
+          results = Enum.map(conversions, &process_conversion(item, image, &1, processor))
+          record_results(model, {collection_name, item_uuid}, results)
+          report_failures(item, results)
+        end
+      after
+        if temp?, do: File.rm(source_path)
+      end
+    end
+  end
 
-      if temp?, do: File.rm(source_path)
+  # Conversions that succeeded are recorded even when others failed.
+  defp record_results(model, {collection_name, item_uuid}, results) do
+    generated =
+      results
+      |> Enum.filter(&match?({:ok, _}, &1))
+      |> Map.new(fn {:ok, name} -> {to_string(name), true} end)
 
-      # Update generated_conversions in JSONB
-      generated =
-        results
-        |> Enum.filter(&match?({:ok, _}, &1))
-        |> Map.new(fn {:ok, name} -> {to_string(name), true} end)
+    update_item_in_jsonb(model, collection_name, item_uuid, fn i ->
+      %{i | generated_conversions: Map.merge(i.generated_conversions, generated)}
+    end)
 
-      update_item_in_jsonb(model, collection_name, item_uuid, fn i ->
-        %{i | generated_conversions: Map.merge(i.generated_conversions, generated)}
-      end)
+    # Generate responsive images for conversions if enabled
+    maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results)
+  end
 
-      # Generate responsive images for conversions if enabled
-      maybe_generate_responsive_for_conversions(model, collection_name, item_uuid, results)
+  defp report_failures(item, results) do
+    case Enum.reject(results, &match?({:ok, _}, &1)) do
+      [] ->
+        :ok
 
-      :ok
+      failures ->
+        Logger.warning(
+          "[PhxMediaLibrary] conversions failed for #{item.file_name} " <>
+            "(uuid=#{item.uuid}): #{inspect(failures)}"
+        )
+
+        {:error, {:conversions_failed, failures}}
     end
   end
 
@@ -102,18 +132,21 @@ defmodule PhxMediaLibrary.Conversions do
     Telemetry.span([:phx_media_library, :conversion], telemetry_metadata, fn ->
       storage = Config.storage_adapter(media_item.disk)
 
+      conversion_path = PathGenerator.relative_path(media_item, conversion.name)
+      temp_path = temp_file_path(conversion_path)
+
       result =
-        with {:ok, converted} <- processor.apply_conversion(image, conversion),
-             conversion_path <- PathGenerator.relative_path(media_item, conversion.name),
-             temp_path <- temp_file_path(conversion_path),
-             {:ok, _} <- save_image(processor, converted, temp_path, conversion),
-             {:ok, content} <- File.read(temp_path),
-             :ok <- PhxMediaLibrary.StorageWrapper.put(storage, conversion_path, content) do
+        try do
+          with {:ok, converted} <- processor.apply_conversion(image, conversion),
+               {:ok, _} <- save_image(processor, converted, temp_path, conversion),
+               {:ok, content} <- File.read(temp_path),
+               :ok <- StorageWrapper.put(storage, conversion_path, content) do
+            {:ok, conversion.name}
+          else
+            error -> {:error, {conversion.name, error}}
+          end
+        after
           File.rm(temp_path)
-          {:ok, conversion.name}
-        else
-          error ->
-            {:error, {conversion.name, error}}
         end
 
       stop_metadata =

@@ -8,6 +8,7 @@ defmodule PhxMediaLibrary.ConversionsProcessTest do
 
   import PhxMediaLibrary.Fixtures
 
+  alias PhxMediaLibrary.AsyncProcessor.Oban, as: ObanProcessor
   alias PhxMediaLibrary.{Conversion, Conversions, MediaData, Storage.Memory, TestRepo}
 
   @moduletag :db
@@ -231,6 +232,89 @@ defmodule PhxMediaLibrary.ConversionsProcessTest do
       conversions = [Conversion.new(:thumb, width: 150, height: 150, fit: :cover)]
 
       assert {:error, :owner_not_found} = Conversions.process(context, conversions)
+    end
+  end
+
+  describe "process/2 failures" do
+    setup do
+      original = Application.get_env(:phx_media_library, :image_processor)
+
+      Application.put_env(
+        :phx_media_library,
+        :image_processor,
+        PhxMediaLibrary.FailingImageProcessor
+      )
+
+      on_exit(fn ->
+        if original,
+          do: Application.put_env(:phx_media_library, :image_processor, original),
+          else: Application.delete_env(:phx_media_library, :image_processor)
+      end)
+
+      image_path = create_temp_image(width: 60, height: 60)
+      on_exit(fn -> File.rm(image_path) end)
+
+      post = create_test_post()
+      uuid = Ecto.UUID.generate()
+      :ok = Memory.put("posts/#{post.id}/#{uuid}/photo.png", File.read!(image_path), [])
+
+      post =
+        create_media_in_jsonb(post, "images", %{
+          uuid: uuid,
+          file_name: "photo.png",
+          mime_type: "image/png",
+          disk: "memory"
+        })
+
+      context = %{
+        owner_module: PhxMediaLibrary.TestPost,
+        owner_id: post.id,
+        collection_name: "images",
+        item_uuid: uuid
+      }
+
+      {:ok, post: post, uuid: uuid, context: context}
+    end
+
+    test "are reported, and the conversions that succeeded are recorded", %{
+      post: post,
+      uuid: uuid,
+      context: context
+    } do
+      conversions = [Conversion.new(:thumb, width: 20), Conversion.new(:broken, width: 20)]
+
+      assert {:error, {:conversions_failed, [{:error, {:broken, {:error, :broken_on_purpose}}}]}} =
+               Conversions.process(context, conversions)
+
+      item =
+        MediaData.get_item(
+          TestRepo.get!(PhxMediaLibrary.TestPost, post.id).media_data,
+          "images",
+          uuid,
+          owner_type: "posts",
+          owner_id: to_string(post.id)
+        )
+
+      assert item.generated_conversions == %{"thumb" => true}
+    end
+
+    test "leave no temporary files behind", %{context: context} do
+      temp_files = fn ->
+        System.tmp_dir!()
+        |> File.ls!()
+        |> Enum.filter(&(&1 =~ "phx_media_conversion_" and &1 =~ "photo"))
+      end
+
+      before = temp_files.()
+      assert {:error, _} = Conversions.process(context, [Conversion.new(:broken, width: 20)])
+      assert temp_files.() -- before == []
+    end
+
+    test "make the Oban job return an error so it is retried", %{context: context} do
+      conversions = [Conversion.new(:broken, width: 20)]
+
+      assert {:error, {:conversions_failed, _}} =
+               ObanProcessor.process_sync(context, conversions)
     end
   end
 

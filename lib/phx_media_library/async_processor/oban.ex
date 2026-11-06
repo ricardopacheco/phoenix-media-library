@@ -54,6 +54,8 @@ if Code.ensure_loaded?(Oban) do
 
     alias PhxMediaLibrary.{Conversions, Workers.ProcessConversions}
 
+    require Logger
+
     @impl true
     def process_async(context, conversions) do
       conversion_names = Enum.map(conversions, &to_string(&1.name))
@@ -67,8 +69,19 @@ if Code.ensure_loaded?(Oban) do
       }
       |> ProcessConversions.new()
       |> Oban.insert()
+      |> case do
+        {:ok, _job} ->
+          :ok
 
-      :ok
+        {:error, reason} = error ->
+          Logger.warning(
+            "[PhxMediaLibrary] could not enqueue conversions for " <>
+              "#{inspect(context.owner_module)}##{context.owner_id} " <>
+              "(uuid=#{context.item_uuid}): #{inspect(reason)}"
+          )
+
+          error
+      end
     end
 
     @doc """
