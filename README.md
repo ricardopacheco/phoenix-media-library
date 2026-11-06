@@ -203,6 +203,15 @@ locally with `mix docs` (output in `doc/index.html`).
 
 Contributions are welcome! Please feel free to submit a Pull Request.
 
+The test suite runs against real services — PostgreSQL and
+[RustFS](https://rustfs.com) (S3-compatible) — started with Docker:
+
+```bash
+docker compose up -d   # postgres on :5432, rustfs on :9000
+mix deps.get
+mix precommit          # format, credo --strict, dialyzer, tests
+```
+
 1. Fork it
 2. Create your feature branch (`git checkout -b feature/my-feature`)
 3. Commit your changes (`git commit -am 'Add my feature'`)

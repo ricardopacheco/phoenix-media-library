@@ -127,6 +127,32 @@ metadata and docs. Both commits were adapted to point at this fork:
   `phx_media_library` on Hex is the upstream library with a `media` table.
 - Version bumped to `0.6.1`, mirroring upstream's numbering.
 
+### Pre-v0.7.0 baseline
+
+Housekeeping so every upstream sync starts from a green `mix precommit`.
+No public API or behaviour changes.
+
+- **Security advisories in locked deps.** Lock-only update within the
+  existing requirements: `ecto` 3.14.3 / `ecto_sql` 3.14.0, `req` 0.7.5,
+  `mint` 1.11.0, `hpax` 1.1.0, `phoenix` 1.8.16, `phoenix_html` 4.4.0,
+  `phoenix_live_view` 1.2.13, `plug` 1.20.3, `plug_crypto` 2.2.1,
+  `postgrex` 0.22.4, `decimal` 3.2.0. The `mix.exs` requirements are
+  unchanged (upstream's `req ~> 0.7.4` bump is reconciled in the 0.9.0 sync).
+- **`mix format`** applied to files that had drifted.
+- **`credo --strict` clean.** Nested modules aliased; deeply nested function
+  bodies split into private helpers (`Conversions`, `MediaAdder`,
+  `MediaData`, `ModelRegistry`, `Storage.S3`, `VideoProcessor.FFmpeg`,
+  `Plug.MediaDownload`, `get_all_media_url/3`, `mix doctor`,
+  `mix regenerate`).
+- **`dialyzer` clean.** Removed unreachable clauses (a generic
+  `{:error, _}` in `MediaLive`'s delete handler and in
+  `Plug.MediaDownload`, plus `|| %{}` on freshly built items) and three
+  stale `.dialyzer_ignore.exs` filters.
+- **Docker test services.** RustFS pinned to `1.0.4` (was `latest`) and its
+  healthcheck now probes `/health/live`, since `/` answers 403 to
+  anonymous requests and always reported the container as unhealthy.
+- README: how to run the test suite locally.
+
 ## [0.6.0] - 2026-03-31
 
 ### Added
