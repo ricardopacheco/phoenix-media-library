@@ -667,6 +667,24 @@ defmodule PhxMediaLibrary.IntegrationTest do
       post = create_post!()
       assert PhxMediaLibrary.get_first_media_url(post, :images) == nil
     end
+
+    test "forwards url options other than :fallback" do
+      post = create_post!()
+      path = create_temp_file("cache bust", "bust.txt")
+
+      {:ok, media} =
+        post |> PhxMediaLibrary.add(path) |> PhxMediaLibrary.to_collection(:images)
+
+      post = TestRepo.get!(PhxMediaLibrary.TestPost, post.id)
+
+      url =
+        PhxMediaLibrary.get_first_media_url(post, :images, fallback: "/x.png", cache_bust: true)
+
+      assert url == PhxMediaLibrary.url(media, nil, cache_bust: true)
+      assert url =~ "?v="
+
+      assert PhxMediaLibrary.get_first_media_url(post, :images, nil, cache_bust: true) == url
+    end
   end
 
   # ---------------------------------------------------------------------------
