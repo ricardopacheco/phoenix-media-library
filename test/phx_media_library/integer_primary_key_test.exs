@@ -69,7 +69,7 @@ defmodule PhxMediaLibrary.IntegerPrimaryKeyTest do
     assert PhxMediaLibrary.url(media) ==
              "/uploads/integer_posts/#{post.id}/#{media.uuid}/photo.png"
 
-    # The test suite's SyncProcessor runs conversions inline on add.
+    # The test suite's AsyncProcessor.Inline runs conversions on add.
     post = TestRepo.get!(TestIntegerPost, post.id)
     assert [item] = PhxMediaLibrary.get_media(post, :images)
     assert item.uuid == media.uuid

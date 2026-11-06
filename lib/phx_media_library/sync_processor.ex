@@ -1,45 +1,29 @@
 defmodule PhxMediaLibrary.SyncProcessor do
   @moduledoc """
-  Synchronous (in-process) implementation of the `PhxMediaLibrary.AsyncProcessor`
-  behaviour. Runs `Conversions.process/2` directly in the caller's process.
+  Deprecated: use `PhxMediaLibrary.AsyncProcessor.Inline`.
 
-  Despite the seemingly contradictory pairing ("sync" implementing "async"),
-  the `AsyncProcessor` behaviour is just a contract for *how conversion work
-  is dispatched* — sibling implementations include `AsyncProcessor.Task`
-  (background Task) and `AsyncProcessor.Oban` (persistent queue).
-
-  ## When to use
-
-    1. **Tests.** Background Tasks spawned by `AsyncProcessor.Task` outlive
-       the test that triggered them, so they fight for the
-       `Ecto.Adapters.SQL.Sandbox` connection and produce noisy
-       `Postgrex.Protocol failed to connect` lines on stderr. Running the
-       conversion inline in the test process keeps the Sandbox connection
-       owner stable.
-    2. **Tiny / single-process apps** that don't want a Task supervisor or
-       Oban running just for media conversions.
-
-  ## Configuration
-
-      config :phx_media_library, async_processor: PhxMediaLibrary.SyncProcessor
-
-  Production deployments with any meaningful upload volume should prefer
-  `AsyncProcessor.Task` (background) or `AsyncProcessor.Oban` (persistent
-  queue with retries).
+  Kept so existing `config :phx_media_library, async_processor:
+  PhxMediaLibrary.SyncProcessor` settings keep working; every call delegates
+  to `PhxMediaLibrary.AsyncProcessor.Inline`, which behaves identically.
   """
+
+  @moduledoc deprecated: "Use PhxMediaLibrary.AsyncProcessor.Inline instead"
 
   @behaviour PhxMediaLibrary.AsyncProcessor
 
-  alias PhxMediaLibrary.Conversions
+  alias PhxMediaLibrary.AsyncProcessor.Inline
 
+  @doc "See `PhxMediaLibrary.AsyncProcessor.Inline.process_async/2`."
   @impl true
-  def process_async(context, conversions) do
-    Conversions.process(context, conversions)
-    :ok
-  end
+  @deprecated "Use PhxMediaLibrary.AsyncProcessor.Inline instead"
+  @spec process_async(PhxMediaLibrary.AsyncProcessor.context(), [PhxMediaLibrary.Conversion.t()]) ::
+          :ok
+  defdelegate process_async(context, conversions), to: Inline
 
+  @doc "See `PhxMediaLibrary.AsyncProcessor.Inline.process_sync/2`."
   @impl true
-  def process_sync(context, conversions) do
-    Conversions.process(context, conversions)
-  end
+  @deprecated "Use PhxMediaLibrary.AsyncProcessor.Inline instead"
+  @spec process_sync(PhxMediaLibrary.AsyncProcessor.context(), [PhxMediaLibrary.Conversion.t()]) ::
+          :ok | {:error, term()}
+  defdelegate process_sync(context, conversions), to: Inline
 end

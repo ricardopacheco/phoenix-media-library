@@ -191,6 +191,20 @@ before returning a response), call `process_sync/2` directly:
 PhxMediaLibrary.AsyncProcessor.Oban.process_sync(media, conversions)
 ```
 
+### Inline Processing (tests, scripts, small apps)
+
+`PhxMediaLibrary.AsyncProcessor.Inline` runs conversions in the calling
+process, so they are finished when `to_collection/3` returns. No Task
+supervisor or Oban needed — handy in tests, where background Tasks would
+outlive the test and fight over the `Ecto.Adapters.SQL.Sandbox` connection:
+
+```elixir
+# config/test.exs
+config :phx_media_library, async_processor: PhxMediaLibrary.AsyncProcessor.Inline
+```
+
+`PhxMediaLibrary.SyncProcessor` is a deprecated alias for it.
+
 ## Testing
 
 ### In-Memory Storage

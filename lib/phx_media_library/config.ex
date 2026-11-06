@@ -71,7 +71,20 @@ defmodule PhxMediaLibrary.Config do
 
   @doc """
   Get the async processor module.
+
+  Built-in processors:
+
+    * `PhxMediaLibrary.AsyncProcessor.Task` (default) — background Task
+    * `PhxMediaLibrary.AsyncProcessor.Oban` — persistent queue with retries
+    * `PhxMediaLibrary.AsyncProcessor.Inline` — runs in the calling process
+      (tests, scripts, small apps)
+
+  ## Configuration
+
+      config :phx_media_library, async_processor: PhxMediaLibrary.AsyncProcessor.Inline
+
   """
+  @spec async_processor() :: module()
   def async_processor do
     Application.get_env(:phx_media_library, :async_processor, PhxMediaLibrary.AsyncProcessor.Task)
   end

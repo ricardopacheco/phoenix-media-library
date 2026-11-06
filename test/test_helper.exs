@@ -8,7 +8,11 @@ Application.put_env(:phx_media_library, :repo, PhxMediaLibrary.TestRepo)
 # Run conversions in-process so background Tasks don't outlive the test
 # that triggered them (which leaks the Sandbox connection and prints
 # `Postgrex.Protocol failed to connect` on stderr).
-Application.put_env(:phx_media_library, :async_processor, PhxMediaLibrary.SyncProcessor)
+Application.put_env(
+  :phx_media_library,
+  :async_processor,
+  PhxMediaLibrary.AsyncProcessor.Inline
+)
 
 Application.put_env(:phx_media_library, :disks,
   local: [

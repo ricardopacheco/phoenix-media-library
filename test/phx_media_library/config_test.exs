@@ -70,7 +70,7 @@ defmodule PhxMediaLibrary.ConfigTest do
     end
 
     test "returns default Task processor when not configured" do
-      # test_helper sets :async_processor to SyncProcessor to keep the
+      # test_helper sets :async_processor to AsyncProcessor.Inline to keep the
       # Sandbox connection clean during tests; temporarily clear it to
       # verify Config.async_processor/0's library-level default.
       original = Application.get_env(:phx_media_library, :async_processor)
