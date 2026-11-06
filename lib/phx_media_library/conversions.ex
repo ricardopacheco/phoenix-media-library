@@ -27,33 +27,40 @@ defmodule PhxMediaLibrary.Conversions do
   - `:owner_id` - The ID of the parent record
   - `:collection_name` - The collection name
   - `:item_uuid` - The UUID of the media item
+
+  The parent record is re-read, since it may have changed between enqueueing
+  and processing. Returns `{:error, :owner_not_found}` when the parent record
+  was deleted meanwhile, and `{:error, :media_item_not_found}` when the media
+  item was removed from it; the Oban worker discards jobs in both cases.
   """
   @spec process(map(), [Conversion.t()]) :: :ok | {:error, term()}
   def process(context, conversions) do
-    %{
-      owner_module: owner_module,
-      owner_id: owner_id,
-      collection_name: collection_name,
-      item_uuid: item_uuid
-    } = context
+    %{owner_module: owner_module, owner_id: owner_id} = context
 
-    processor = Config.image_processor()
+    # Load a fresh copy of the parent record and extract the media item
+    case Config.repo().get(owner_module, owner_id) do
+      nil -> {:error, :owner_not_found}
+      model -> process_for_owner(model, context, conversions)
+    end
+  end
 
-    # Load fresh model and extract the media item
-    model = Config.repo().get!(owner_module, owner_id)
-    column = Helpers.media_column(model)
-    data = Map.get(model, column) || %{}
-    owner_type = Helpers.owner_type(model)
+  defp process_for_owner(model, context, conversions) do
+    %{collection_name: collection_name, item_uuid: item_uuid} = context
+    data = Map.get(model, Helpers.media_column(model)) || %{}
 
     media_item =
       MediaData.get_item(data, collection_name, item_uuid,
-        owner_type: owner_type,
-        owner_id: to_string(owner_id)
+        owner_type: Helpers.owner_type(model),
+        owner_id: to_string(context.owner_id)
       )
 
     case media_item do
-      nil -> {:error, :media_item_not_found}
-      item -> run_conversions(model, item, {collection_name, item_uuid}, conversions, processor)
+      nil ->
+        {:error, :media_item_not_found}
+
+      item ->
+        processor = Config.image_processor()
+        run_conversions(model, item, {collection_name, item_uuid}, conversions, processor)
     end
   end
 
@@ -154,8 +161,15 @@ defmodule PhxMediaLibrary.Conversions do
   end
 
   defp generate_responsive_for_conversions(model, collection_name, item_uuid, results) do
-    # Get fresh model with updated conversions
-    fresh = Config.repo().get!(model.__struct__, model.id)
+    # Get fresh model with updated conversions (it may have been deleted
+    # while the conversions ran)
+    case Config.repo().get(model.__struct__, model.id) do
+      nil -> :ok
+      fresh -> generate_responsive_for_item(fresh, collection_name, item_uuid, results)
+    end
+  end
+
+  defp generate_responsive_for_item(fresh, collection_name, item_uuid, results) do
     column = Helpers.media_column(fresh)
     data = Map.get(fresh, column) || %{}
     owner_type = Helpers.owner_type(fresh)

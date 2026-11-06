@@ -49,6 +49,24 @@ defmodule PhxMediaLibrary.Workers.ProcessConversionsTest do
                )
     end
 
+    test "discards job when the owner record was deleted" do
+      post = Fixtures.create_test_post()
+      PhxMediaLibrary.TestRepo.delete!(post)
+
+      assert {:discard, :owner_not_found} ==
+               Oban.Testing.perform_job(
+                 ProcessConversions,
+                 %{
+                   "owner_module" => "Elixir.PhxMediaLibrary.TestPost",
+                   "owner_id" => post.id,
+                   "collection_name" => "images",
+                   "item_uuid" => Ecto.UUID.generate(),
+                   "conversions" => ["thumb"]
+                 },
+                 []
+               )
+    end
+
     test "returns :ok when no conversions are resolved" do
       post = Fixtures.create_test_post()
       media = Fixtures.create_media(%{collection_name: "default", post: post})

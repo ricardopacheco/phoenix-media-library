@@ -214,6 +214,24 @@ defmodule PhxMediaLibrary.ConversionsProcessTest do
 
       assert {:error, :media_item_not_found} = Conversions.process(context, conversions)
     end
+
+    test "returns error when the owner record was deleted before processing" do
+      post = create_test_post()
+      uuid = Ecto.UUID.generate()
+      create_media_in_jsonb(post, "images", %{uuid: uuid, file_name: "photo.png"})
+      TestRepo.delete!(post)
+
+      context = %{
+        owner_module: PhxMediaLibrary.TestPost,
+        owner_id: post.id,
+        collection_name: "images",
+        item_uuid: uuid
+      }
+
+      conversions = [Conversion.new(:thumb, width: 150, height: 150, fit: :cover)]
+
+      assert {:error, :owner_not_found} = Conversions.process(context, conversions)
+    end
   end
 
   describe "process/2 with local disk storage" do

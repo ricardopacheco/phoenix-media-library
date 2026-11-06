@@ -150,6 +150,7 @@ if Code.ensure_loaded?(Oban) do
           case Conversions.process(context, conversions) do
             :ok -> :ok
             {:error, :media_item_not_found} -> {:discard, :media_not_found}
+            {:error, :owner_not_found} -> {:discard, :owner_not_found}
             {:error, reason} -> {:error, reason}
           end
       end
