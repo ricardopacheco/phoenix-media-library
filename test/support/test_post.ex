@@ -42,7 +42,13 @@ defmodule PhxMediaLibrary.TestPost do
         responsive: [widths: [160, 320]],
         accepts: ~w(image/jpeg image/png image/webp)
       ),
-      collection(:responsive_off, responsive: false)
+      collection(:responsive_off, responsive: false),
+      # Capped WebP: the served file fits in 100px; variants above it are skipped.
+      collection(:webp_capped,
+        webp: [max_dimension: 100],
+        responsive: [widths: [50, 80, 200]],
+        accepts: ~w(image/jpeg image/png image/webp)
+      )
     ]
   end
 

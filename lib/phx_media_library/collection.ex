@@ -23,7 +23,7 @@ defmodule PhxMediaLibrary.Collection do
     the original on upload; `nil` (default) leaves that to
     `PhxMediaLibrary.with_responsive_images/1` and the conversions to the global config.
   - `:webp` — WebP override for this collection: `true`/`false`, or a keyword of
-    knobs (`quality:`, `keep_original:`) merged over the global
+    knobs (`quality:`, `keep_original:`, `max_dimension:`) merged over the global
     `config :phx_media_library, :webp` (see `PhxMediaLibrary.Config.resolve_webp/1`).
     `nil` (default) inherits the global setting.
 

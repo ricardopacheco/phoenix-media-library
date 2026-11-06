@@ -15,6 +15,10 @@ defmodule PhxMediaLibrary.Webp do
   See `PhxMediaLibrary.Config.resolve_webp/1`:
 
     * `:quality` — WebP quality, 1–100 (default `82`)
+    * `:max_dimension` — fit the WebP inside a square of this many pixels,
+      aspect ratio kept and never upscaled (default `nil`: the source size).
+      The resulting size is recorded in `custom_properties["webp_width"]` and
+      `["webp_height"]`, and responsive variants wider than it are skipped
     * `:keep_original` — `true` (default) keeps the source file. `false`
       deletes it once the upload's conversions have been generated from it —
       conversions always read the original, so they run synchronously first
@@ -118,6 +122,10 @@ defmodule PhxMediaLibrary.Webp do
   Transcode `source_path` (a local file) to WebP and store it beside the
   original, at `original_storage_path` with a `.webp` extension.
 
+  With `:max_dimension` in `settings`, the WebP is scaled down to fit inside
+  that square and its size is recorded in `custom_properties["webp_width"]` /
+  `["webp_height"]`.
+
   Returns the item with `custom_properties["webp"]` set to the stored path;
   the caller persists it. On any processor or storage error, logs a warning
   and returns the item unchanged, so the original keeps being served.
@@ -125,6 +133,7 @@ defmodule PhxMediaLibrary.Webp do
   @spec generate(map(), String.t(), keyword(), StorageWrapper.t(), String.t()) :: map()
   def generate(item, source_path, settings, storage, original_storage_path) do
     quality = Keyword.get(settings, :quality, 82)
+    max_dimension = Keyword.get(settings, :max_dimension)
     webp_path = Path.rootname(original_storage_path) <> ".webp"
 
     # libvips picks the encoder from the destination extension, so the temp
@@ -136,16 +145,23 @@ defmodule PhxMediaLibrary.Webp do
 
     result =
       with {:ok, image} <- processor.open(source_path),
+           {:ok, {image, dims}} <- fit_within(image, max_dimension, processor),
            {:ok, _} <- processor.save(image, tmp, format: :webp, quality: quality),
-           {:ok, content} <- File.read(tmp) do
-        StorageWrapper.put(storage, webp_path, content)
+           {:ok, content} <- File.read(tmp),
+           :ok <- StorageWrapper.put(storage, webp_path, content) do
+        {:ok, dims}
       end
 
     _ = File.rm(tmp)
 
     case result do
-      :ok ->
-        %{item | custom_properties: Map.put(item.custom_properties || %{}, "webp", webp_path)}
+      {:ok, dims} ->
+        props =
+          (item.custom_properties || %{})
+          |> Map.put("webp", webp_path)
+          |> put_dimensions(dims)
+
+        %{item | custom_properties: props}
 
       error ->
         Logger.warning(
@@ -156,4 +172,68 @@ defmodule PhxMediaLibrary.Webp do
         item
     end
   end
+
+  @doc """
+  Dimensions of a `width` x `height` image scaled to fit inside a
+  `max_dimension` square, aspect ratio kept. Never upscales; `nil` means no
+  cap.
+
+  ## Examples
+
+      iex> PhxMediaLibrary.Webp.fit_dimensions({3000, 2000}, 1200)
+      {1200, 800}
+
+      iex> PhxMediaLibrary.Webp.fit_dimensions({600, 400}, 1200)
+      {600, 400}
+
+      iex> PhxMediaLibrary.Webp.fit_dimensions({600, 400}, nil)
+      {600, 400}
+
+  """
+  @spec fit_dimensions({pos_integer(), pos_integer()}, pos_integer() | nil) ::
+          {pos_integer(), pos_integer()}
+  def fit_dimensions({w, h}, nil), do: {w, h}
+
+  def fit_dimensions({w, h}, max) when is_integer(max) and max > 0 do
+    longest = max(w, h)
+
+    if longest <= max do
+      {w, h}
+    else
+      scale = max / longest
+      {max(round(w * scale), 1), max(round(h * scale), 1)}
+    end
+  end
+
+  # Without a cap the WebP keeps the source size, which isn't recorded.
+  defp fit_within(image, nil, _processor), do: {:ok, {image, nil}}
+
+  defp fit_within(image, max_dimension, processor) do
+    with {:ok, {w, h}} <- processor.dimensions(image) do
+      case fit_dimensions({w, h}, max_dimension) do
+        {^w, ^h} -> {:ok, {image, {w, h}}}
+        {tw, th} -> resize(image, {tw, th}, processor)
+      end
+    end
+  end
+
+  defp resize(image, {width, height}, processor) do
+    conversion = %PhxMediaLibrary.Conversion{
+      name: :webp,
+      width: width,
+      height: height,
+      fit: :contain
+    }
+
+    # Record the size libvips actually produced (rounding may differ by 1px)
+    with {:ok, resized} <- processor.apply_conversion(image, conversion),
+         {:ok, dims} <- processor.dimensions(resized) do
+      {:ok, {resized, dims}}
+    end
+  end
+
+  defp put_dimensions(props, nil), do: Map.drop(props, ["webp_width", "webp_height"])
+
+  defp put_dimensions(props, {w, h}),
+    do: props |> Map.put("webp_width", w) |> Map.put("webp_height", h)
 end

@@ -22,11 +22,12 @@ defmodule PhxMediaLibrary.ConfigResolveTest do
   end
 
   describe "resolve_webp/1" do
-    test "defaults to disabled, quality 82, keep_original" do
+    test "defaults to disabled, quality 82, keep_original, no size cap" do
       assert Map.new(Config.resolve_webp(nil)) == %{
                enabled: false,
                quality: 82,
-               keep_original: true
+               keep_original: true,
+               max_dimension: nil
              }
     end
 
@@ -34,7 +35,8 @@ defmodule PhxMediaLibrary.ConfigResolveTest do
       assert Map.new(Config.resolve_webp(true)) == %{
                enabled: true,
                quality: 82,
-               keep_original: true
+               keep_original: true,
+               max_dimension: nil
              }
 
       assert Config.resolve_webp(false)[:enabled] == false
@@ -58,7 +60,8 @@ defmodule PhxMediaLibrary.ConfigResolveTest do
       assert Map.new(Config.resolve_webp(nil)) == %{
                enabled: true,
                quality: 70,
-               keep_original: true
+               keep_original: true,
+               max_dimension: nil
              }
 
       assert Config.resolve_webp(false)[:enabled] == false

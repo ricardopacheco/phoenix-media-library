@@ -77,7 +77,12 @@ defmodule PhxMediaLibrary.ResponsiveImages do
     {source_path, temp?} = get_source_path(media, conversion)
 
     with {:ok, image} <- processor.open(source_path),
-         {:ok, {orig_width, orig_height}} <- processor.dimensions(image) do
+         {:ok, source_dims} <- processor.dimensions(image) do
+      # The served full-size file may be a capped WebP (webp: [max_dimension:]):
+      # variants wider than it would upscale, and the largest srcset entry
+      # must carry the served size, not the source's.
+      {orig_width, orig_height} = served_dimensions(media, conversion, source_dims)
+
       variants =
         widths
         |> Enum.filter(&(&1 < orig_width))
@@ -312,6 +317,16 @@ defmodule PhxMediaLibrary.ResponsiveImages do
       _ -> %{}
     end
   end
+
+  defp served_dimensions(
+         %{custom_properties: %{"webp_width" => w, "webp_height" => h}},
+         nil,
+         _source_dims
+       )
+       when is_integer(w) and is_integer(h),
+       do: {w, h}
+
+  defp served_dimensions(_media, _conversion, source_dims), do: source_dims
 
   # Obtains a local file path for the source media.
   # For local disk storage, returns the existing filesystem path.

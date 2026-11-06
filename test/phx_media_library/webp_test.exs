@@ -175,6 +175,61 @@ defmodule PhxMediaLibrary.WebpTest do
     end
   end
 
+  describe "max_dimension" do
+    defp image_size(root, path) do
+      image = Image.open!(Path.join(root, path))
+      {Image.width(image), Image.height(image)}
+    end
+
+    test "scales the served WebP to fit and records its size", %{root: root, post: post} do
+      wide = create_temp_image(format: :jpg, width: 1000, height: 500)
+      on_exit(fn -> File.rm(wide) end)
+
+      assert {:ok, media} = add(post, wide, :webp_capped)
+
+      assert image_size(root, Webp.path(media)) == {100, 50}
+      assert %{"webp_width" => 100, "webp_height" => 50} = media.custom_properties
+      assert stored_item(post, :webp_capped).custom_properties["webp_width"] == 100
+
+      # the original is kept at its own size
+      assert image_size(root, PathGenerator.relative_path(media, nil)) == {1000, 500}
+    end
+
+    test "never upscales", %{root: root, post: post} do
+      assert {:ok, media} = add(post, temp_image(:jpg), :webp_capped)
+
+      assert image_size(root, Webp.path(media)) == {60, 60}
+      assert %{"webp_width" => 60, "webp_height" => 60} = media.custom_properties
+    end
+
+    test "responsive variants stop at the served size", %{post: post} do
+      wide = create_temp_image(format: :jpg, width: 1000, height: 500)
+      on_exit(fn -> File.rm(wide) end)
+
+      assert {:ok, media} = add(post, wide, :webp_capped)
+
+      variants = media.responsive_images["original"]["variants"] |> Enum.sort_by(& &1["width"])
+
+      # widths [50, 80, 200]: 200 is wider than the 100px WebP and is skipped;
+      # the largest entry is the WebP itself, at its real size
+      assert Enum.map(variants, &{&1["width"], &1["height"]}) == [{50, 25}, {80, 40}, {100, 50}]
+      assert List.last(variants)["path"] == Webp.path(media)
+    end
+
+    test "without a cap, no size is recorded", %{post: post} do
+      assert {:ok, media} = add(post, temp_image(:jpg), :webp_photos)
+      refute Map.has_key?(media.custom_properties, "webp_width")
+    end
+
+    test "fit_dimensions/2" do
+      assert Webp.fit_dimensions({3000, 2000}, 1200) == {1200, 800}
+      assert Webp.fit_dimensions({2000, 3000}, 1200) == {800, 1200}
+      assert Webp.fit_dimensions({600, 400}, 1200) == {600, 400}
+      assert Webp.fit_dimensions({600, 400}, nil) == {600, 400}
+      assert Webp.fit_dimensions({5000, 1}, 100) == {100, 1}
+    end
+  end
+
   describe "owned paths" do
     test "include the WebP", %{post: post} do
       assert {:ok, media} = add(post, temp_image(:jpg), :webp_photos)

@@ -255,7 +255,7 @@ defmodule PhxMediaLibrary.Config do
 
   # ── WebP ────────────────────────────────────────────────────────────────────
 
-  @webp_defaults [enabled: false, quality: 82, keep_original: true]
+  @webp_defaults [enabled: false, quality: 82, keep_original: true, max_dimension: nil]
 
   @doc """
   Get the global WebP configuration (`config :phx_media_library, :webp`).
@@ -263,7 +263,7 @@ defmodule PhxMediaLibrary.Config do
   ## Configuration
 
       config :phx_media_library,
-        webp: [enabled: false, quality: 82, keep_original: true]
+        webp: [enabled: false, quality: 82, keep_original: true, max_dimension: nil]
 
   """
   @spec webp_config() :: keyword()
@@ -273,14 +273,16 @@ defmodule PhxMediaLibrary.Config do
   Resolve the effective WebP settings for a collection.
 
   Merges the collection's `webp:` override over the global `:webp` config over
-  the library defaults (`enabled: false, quality: 82, keep_original: true`):
+  the library defaults (`enabled: false, quality: 82, keep_original: true,
+  max_dimension: nil`):
 
     * `nil` — inherit the global settings
     * `true` / `false` — force WebP on or off, keeping the other knobs
     * a keyword — merged over the global settings; implies `enabled: true`
       unless it says otherwise
 
-  Returns a keyword with `:enabled`, `:quality` and `:keep_original`. WebP
+  Returns a keyword with `:enabled`, `:quality`, `:keep_original` and
+  `:max_dimension`. WebP
   needs the optional `:image` library, so `:enabled` is forced to `false`
   when it isn't loaded.
 

@@ -269,6 +269,13 @@ end
 | `:enabled` | `false` | Generate and serve the WebP |
 | `:quality` | `82` | WebP quality (1–100) |
 | `:keep_original` | `true` | Keep the uploaded file. With `false` it is deleted once the upload's conversions exist |
+| `:max_dimension` | `nil` | Fit the WebP inside a square of this many pixels (aspect kept, never upscaled); `nil` keeps the source size |
+
+**`max_dimension`.** `webp: [max_dimension: 1600]` caps the served WebP at
+1600px on its longest side and records its size in
+`custom_properties["webp_width"]`/`["webp_height"]`. Responsive variants wider
+than it are skipped. Combined with `keep_original: false`, storage grows with
+what you display rather than with what was uploaded.
 
 **`keep_original: false`.** Conversions are made from the original, so for
 these collections they run synchronously during the upload (whatever the
