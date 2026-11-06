@@ -58,6 +58,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 >   upstream in 0.9.0 and removed in 0.10.0 in favour of `mix
 >   phx_media_library.doctor --rebuild --only webp`). Backfilling WebP for
 >   existing media is left to the doctor work of those versions.
+> - **`mix phx_media_library.drop_originals`** and `Webp.drop_original/1`
+>   (upstream 0.8.3; deprecated in 0.9.0 and removed in 0.10.0 in favour of
+>   `mix phx_media_library.doctor --drop-originals`). Applying
+>   `keep_original: false` to existing media is left to the same doctor work;
+>   until then it applies to new uploads only.
 >
 > The CHANGELOG below preserves upstream's release history verbatim. Where
 > a feature in those entries is in the not-ported list above, assume the
@@ -288,6 +293,33 @@ Upstream `v0.8.2` (`c5332cf`). Ported:
 - **`regenerate_webp` and `PRIORITIES.md` changes** — not ported (the task
   isn't ported; `PRIORITIES.md` is upstream's roadmap).
 - Version bumped to `0.8.2`, mirroring upstream's numbering.
+
+### v0.8.3 upstream sync (1 commit)
+
+Upstream `v0.8.3` (`ba28c2e`). Nothing to port:
+
+- **`Media.owned_paths/1`, `clean` using it, and the "Found 0 orphaned
+  file(s)" fix** — already present: brought forward in the 0.8.0 sync, with
+  tests. Upstream's extra `paths_in/1` clause for a list-shaped
+  `responsive_images` layout is not needed; that layout never existed here.
+- **`mix phx_media_library.drop_originals` and `Webp.drop_original/1`** — not
+  ported (see the not-ported list above), along with their guide section.
+- Version bumped to `0.8.3`, mirroring upstream's numbering.
+
+## [0.8.3] - 2026-09-12
+
+### Added
+- `mix phx_media_library.drop_originals` deletes the source file of
+  WebP-served media in collections resolved to `keep_original: false`. Run it
+  last, after `regenerate_webp` and `regenerate_responsive`.
+- `Media.owned_paths/1` and `Webp.drop_original/1`.
+
+### Fixed
+- `mix phx_media_library.clean` did not count the served WebP sibling or the
+  nested `"variants"` responsive layout as owned files, so `--force` would
+  have deleted them. It now uses `Media.owned_paths/1`.
+- `clean` reported "Found 0 orphaned file(s)" instead of "No orphaned files"
+  (guard on a `MapSet` never matched; flagged by Elixir 1.20's type checker).
 
 ## [0.8.2] - 2026-09-12
 

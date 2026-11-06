@@ -291,7 +291,8 @@ Notes:
   encoding fails, the upload is stored as usual and the original is served.
 - GIFs are left alone: transcoding an animated GIF would keep only its first
   frame. SVG and WebP uploads are served as they are.
-- Only new uploads get a WebP; existing media isn't converted retroactively.
+- Only new uploads get a WebP, and `keep_original: false` only drops the
+  originals of new uploads; existing media isn't changed retroactively.
 - Responsive variants of a WebP-served image are WebP too, and the WebP
   derivative is the full-size `srcset` entry (see [Responsive Images](#responsive-images)).
 
