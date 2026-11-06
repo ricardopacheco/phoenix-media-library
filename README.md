@@ -115,10 +115,14 @@ end
 
 ## Installation
 
+This fork is not published to Hex yet — the `phx_media_library` package on
+Hex is the upstream library, which uses a separate `media` table. Install it
+from GitHub, pinned to a release tag:
+
 ```elixir
 def deps do
   [
-    {:phx_media_library, "~> 0.5.0"},
+    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.6.1"},
 
     # Optional: Image processing (requires libvips)
     {:image, "~> 0.54"},

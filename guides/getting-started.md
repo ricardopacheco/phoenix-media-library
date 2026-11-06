@@ -4,12 +4,15 @@ This guide walks you through installing PhxMediaLibrary, configuring storage, an
 
 ## Installation
 
-Add `phx_media_library` to your dependencies in `mix.exs`:
+Add `phx_media_library` to your dependencies in `mix.exs`. This fork is not
+published to Hex yet (the `phx_media_library` package on Hex is the upstream
+library, which uses a separate `media` table), so install it from GitHub,
+pinned to a release tag:
 
 ```elixir
 def deps do
   [
-    {:phx_media_library, "~> 0.5.0"},
+    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.6.1"},
 
     # Optional: Image processing (requires libvips)
     {:image, "~> 0.54"},
@@ -133,14 +136,14 @@ CSS bundle, add the library's source path to your `assets/css/app.css`:
 @source "../js";
 @source "../../lib/my_app_web";
 
-/* PhxMediaLibrary — include both paths to support Hex deps and path deps.
+/* PhxMediaLibrary — include both paths to support git/Hex deps and path deps.
    Tailwind v4 silently ignores paths that don't exist. */
 @source "../../deps/phx_media_library/lib";
 @source "../../../phx_media_library/lib";
 ```
 
-> **Why two `@source` lines?** When installed from Hex, the library lives in
-> `deps/phx_media_library/lib/`. When used as a path dependency (e.g.
+> **Why two `@source` lines?** When installed from GitHub (or Hex), the library
+> lives in `deps/phx_media_library/lib/`. When used as a path dependency (e.g.
 > `{:phx_media_library, path: "../phx_media_library"}`), it lives outside
 > your project's `deps/` folder. Tailwind v4 silently skips any `@source`
 > path that doesn't exist, so including both ensures the classes are scanned
