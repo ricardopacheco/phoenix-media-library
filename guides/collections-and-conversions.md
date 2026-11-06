@@ -43,8 +43,9 @@ end
 |--------|------|---------|-------------|
 | `:accepts` | `[String.t()]` | `nil` (all types) | Allowed MIME types |
 | `:single_file` | `boolean()` | `false` | Keep only one file; new upload replaces existing |
-| `:max_files` | `pos_integer()` | `nil` (unlimited) | Maximum number of files; oldest excess is removed |
-| `:max_size` | `pos_integer()` | `nil` (unlimited) | Maximum file size in bytes |
+| `:max_files` | `pos_integer()` | `nil` (unlimited) | Maximum number of files; oldest excess is removed (`0` means unlimited) |
+| `:max_size` | `pos_integer()` | `nil` (unlimited) | Maximum file size in bytes (also caps `add_from_url/3` downloads) |
+| `:max_pixels` | `pos_integer()` or `:infinity` | `nil` (global, 100 MP) | Maximum image size in pixels; see [Image Pixel Limit](#image-pixel-limit) |
 | `:disk` | `atom()` | configured default | Storage disk override |
 | `:fallback_url` | `String.t()` | `nil` | URL returned when collection is empty |
 | `:fallback_path` | `String.t()` | `nil` | Filesystem path returned when collection is empty |
@@ -55,10 +56,18 @@ end
 ### Content-Type Verification
 
 By default, PhxMediaLibrary inspects the first bytes of every uploaded file
-(magic bytes) to detect the real MIME type. If the detected type doesn't match
-the declared content type, the upload is rejected with
-`{:error, :content_type_mismatch}`. This covers 50+ formats including images,
-documents, audio, video, and archives.
+(magic bytes) to detect the real MIME type, and compares it with the type the
+file's **extension** claims — the extension decides how the file is later
+served. A mismatch is rejected with
+`{:error, {:content_type_mismatch, detected, declared}}`: image bytes named
+`page.html` are refused. This covers 50+ formats including images, documents,
+audio, video, and archives.
+
+Compatible types are not a mismatch: the same family (`image/*`, `audio/*`,
+`video/*` — a PNG saved as `.jpg`), ZIP-based documents (`.docx`, `.xlsx`,
+`.odt`, `.epub`), `application/xml` vs `text/xml`, and unknown extensions.
+SVG, which can carry scripts, only matches SVG. Files without recognizable
+magic bytes (plain text, CSV, HTML) are trusted as declared.
 
 You can disable this per-collection:
 
@@ -84,6 +93,31 @@ end
 config :phx_media_library,
   mime_detector: MyApp.MimeDetector
 ```
+
+### Image Pixel Limit
+
+Images over 100 megapixels (width × height) are rejected before anything
+decodes them, with `{:error, {:image_too_large, pixels, max}}`. A small PNG
+can declare 40000 × 40000 pixels and take gigabytes of memory to decode; the
+check only reads the image header.
+
+```elixir
+# config/config.exs — global limit (:infinity disables it)
+config :phx_media_library, max_image_pixels: 50_000_000
+
+# per collection
+collection :scans, max_pixels: 200_000_000
+```
+
+### Untrusted Filenames
+
+Upload filenames come from the client (`Plug.Upload`, a LiveView entry's
+`client_name`, `using_filename/2`, a remote `Content-Disposition`, a direct
+upload's `:filename`). They are reduced to a single safe path segment
+(`PhxMediaLibrary.FileName.safe/1`: no directories, control characters or
+leading dots), so `"../../app.js"` is stored as `app.js` inside the media's
+own folder. The `Disk` adapter also refuses any path that would leave its
+root (`{:error, :path_outside_root}`).
 
 ### File Size Validation
 

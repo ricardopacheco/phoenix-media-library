@@ -100,14 +100,14 @@ end
 | **Image conversions** | Thumbnails, resizes, format conversion, responsive srcset — optional, works without libvips |
 | **WebP** | Per-collection `webp:` opt-in: JPEG/PNG/HEIC uploads served as WebP, optionally replacing the original |
 | **Metadata extraction** | Auto-extract dimensions, EXIF, format, type classification; stored in `metadata` JSON field |
-| **Remote URLs** | `add_from_url/3` with scheme validation, custom headers, timeout, download telemetry |
+| **Remote URLs** | `add_from_url/3`: private hosts refused, streamed to disk, size and time limits, custom headers, download telemetry |
 | **Storage** | Local disk, S3, in-memory (tests), or custom adapters via `PhxMediaLibrary.Storage` behaviour |
 | **Streaming uploads** | Files streamed to storage in 64 KB chunks — never loaded entirely into memory |
 | **Direct S3 uploads** | `presigned_upload_url/3` + `complete_external_upload/4` for client-to-S3 without proxying |
 | **Soft deletes** | At parent record level only — media files are removed when the parent record is hard-deleted |
 | **Async processing** | Task (default) or Oban adapter with persistence, retries, and `process_sync/2` |
 | **LiveView** | Drop-in `<.media_upload>` and `<.media_gallery>` components, `LiveUpload` helpers |
-| **Security** | Content-based MIME detection (50+ formats via magic bytes), SHA-256 checksums |
+| **Security** | Content checked against the extension (50+ formats via magic bytes), safe filenames, pixel-flood limit, SSRF-safe remote downloads, SHA-256 checksums |
 | **Batch ops** | `clear_collection/2`, `clear_media/1`, `reorder/3`, `move_to/4` |
 | **Telemetry** | `:start`/`:stop`/`:exception` spans for add, delete, conversion, storage, batch, download |
 | **Errors** | Tagged tuples + structured exceptions (`Error`, `StorageError`, `ValidationError`) |
@@ -123,7 +123,7 @@ from GitHub, pinned to a release tag:
 ```elixir
 def deps do
   [
-    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.8.3"},
+    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.8.4"},
 
     # Optional: Image processing (requires libvips)
     {:image, "~> 0.54"},

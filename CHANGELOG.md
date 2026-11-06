@@ -306,6 +306,146 @@ Upstream `v0.8.3` (`ba28c2e`). Nothing to port:
   ported (see the not-ported list above), along with their guide section.
 - Version bumped to `0.8.3`, mirroring upstream's numbering.
 
+### v0.8.4 upstream sync (1 commit)
+
+Upstream `v0.8.4` (`4aaf192`) is a hardening release. Every security issue
+it fixes existed in this fork too. Ported and adapted:
+
+- **Untrusted filenames** — new `PhxMediaLibrary.FileName` (`safe/1`,
+  `slug/1`) reduces client filenames (`Plug.Upload`, LiveView entries,
+  `using_filename/2`, a remote `Content-Disposition`, the `:filename` of
+  `presigned_upload_url/3` and `complete_external_upload/4`) to one safe
+  segment; `Storage.Disk` refuses paths outside its root
+  (`{:error, :path_outside_root}`, `path/2` returns `nil`).
+- **Content-type check** — it compared the detected type with itself; it now
+  compares the content with the extension's type, with upstream's tolerance
+  rules and compatibility-matrix tests. Opt out per collection with
+  `verify_content_type: false`.
+- **`add_from_url/3`** — new `PhxMediaLibrary.Downloader` (ported as is):
+  private hosts refused (every redirect re-checked, connection pinned to the
+  checked IP), streamed to disk without decompression, `:max_size` (the
+  collection's `max_size` by default), `:total_timeout`,
+  `:allow_private_hosts`. **Breaking:** downloads from private or loopback
+  hosts now need `allow_private_hosts: true`.
+- **Pixel limit** — `config :phx_media_library, :max_image_pixels`
+  (100 megapixels by default, `:infinity` disables) and `max_pixels:` per
+  collection; `{:error, {:image_too_large, pixels, max}}`.
+  `ValidationError` messages no longer print large numbers in scientific
+  notation ("1.6e3").
+- **`Plug.MediaDownload`** sends `x-content-type-options: nosniff`. The plug
+  had no tests; it now does.
+- **EXIF dates** no longer wipe all metadata; a failure while reading EXIF
+  drops only the `"exif"` key.
+- **Failed conversions are reported** — `Conversions.process/2` returns
+  `{:error, {:conversions_failed, failures}}` (Oban retries); successes are
+  still recorded; temp files are removed on failure; the Oban adapter
+  returns and logs a failed enqueue.
+- **Cleanup when an upload fails** — a downloaded temp file is removed when a
+  later step fails or raises; the stored original and WebP are deleted when
+  the JSONB write fails.
+- **`max_files: 0`** means no limit instead of deleting every file (in the
+  fork it also deleted the upload itself, and gave LiveView
+  `max_entries: 0`).
+- **Model lookups** — upstream's new `PhxMediaLibrary.Model` is not ported as
+  a module; the duplicated lookups were consolidated in `Helpers`, the fork's
+  existing home for them (a `Model` module is reconsidered in the 0.9.0
+  sync). Where copies had drifted: `complete_external_upload/4` now applies
+  `single_file`/`max_files`, and collection names read from JSONB are no
+  longer turned into atoms (`String.to_atom/1` in `Conversions`).
+- **Dialyzer** — `:mix` in the PLT, `.dialyzer_ignore.exs` empty.
+- **Already present** (brought forward earlier): width- and height-only
+  conversions, conversions and responsive images from remote storage (this
+  fork's own temp-copy code; upstream's `LocalSource` is not needed), keeping
+  the original when a conversion fails, `clean` not deleting WebP-only
+  records, every delete path using `Media.delete_files/1`, and
+  `Inline.process_sync/2` returning the result.
+- **Not applicable**: `purge_deleted` and soft-delete handling in
+  `complete_external_upload/4` (no soft deletes here), and upstream's
+  `mix stats` change (it reads the `media` table).
+- Version bumped to `0.8.4`, mirroring upstream's numbering.
+
+## [0.8.4] - 2026-10-04
+
+### Added
+Small additions that the fixes below needed:
+- `add_from_url/3` options `:max_size`, `:total_timeout` and
+  `:allow_private_hosts`.
+- `Media.delete_files/1`, `PhxMediaLibrary.FileName`,
+  `PhxMediaLibrary.Downloader`, `PhxMediaLibrary.LocalSource` and
+  `PhxMediaLibrary.Model`.
+- `max_pixels:` collection option and `config :phx_media_library,
+  :max_image_pixels` (see Security).
+
+### Security
+- **Upload filenames are sanitized.** The client's filename (`Plug.Upload`,
+  LiveView `client_name`, a remote `Content-Disposition`) went into the
+  storage path unchanged, so `"../../app.js"` could write — and on delete,
+  remove — files outside the media directory. Names are now reduced to a
+  single safe segment (`PhxMediaLibrary.FileName.safe/1`), and the `Disk`
+  adapter refuses any path that leaves its root (`{:error, :path_outside_root}`).
+- **The content-type check now runs.** `MediaAdder` compared the detected
+  type with itself, so a file with image bytes named `page.html` passed. It
+  now compares the content with the type the extension claims. Same-family
+  types (a PNG saved as `.jpg`), ZIP-based documents (`.docx`, `.xlsx`) and
+  unknown extensions are not a mismatch; SVG (which can carry scripts) only
+  matches SVG. Opt out per collection with `verify_content_type: false`.
+- **Images over 100 megapixels are rejected** before decoding
+  (`{:error, {:image_too_large, pixels, max}}`). A small PNG can declare
+  40000 × 40000 pixels and take gigabytes and seconds of CPU to process.
+  Only the header is read, so the check is cheap. Change the default with
+  `config :phx_media_library, max_image_pixels: n` or per collection with
+  `max_pixels:`; `:infinity` disables it.
+- **`add_from_url/3` refuses private networks (SSRF).** Hosts resolving to
+  loopback, private, link-local (cloud metadata), CGNAT or multicast
+  addresses are rejected, every redirect hop is re-checked, and the
+  connection is pinned to the checked IP. `allow_private_hosts: true` opts out.
+- `add_from_url/3` streams to disk instead of memory, no longer decompresses
+  the body (gzip bombs), and stops at `:max_size` (the collection's
+  `max_size` by default) and `:total_timeout` (5 minutes by default).
+- `Plug.MediaDownload` sends `x-content-type-options: nosniff`.
+
+### Fixed
+- `mix phx_media_library.clean --force` deleted the records of media whose
+  original was dropped (`keep_original: false`, `drop_originals`). A record
+  is now an orphan only when none of its files exist.
+- Deleting media left files behind: `clear_collection/2`, `clear_media/1`,
+  `purge_trashed/2` and `mix phx_media_library.purge_deleted` skipped the WebP
+  and responsive variants, and `Media.delete/1` skipped the WebP. All delete
+  paths now use the new `Media.delete_files/1` (built on `owned_paths/1`).
+- Conversions and responsive images silently did nothing on S3 and other
+  storage without a local path. The source is now fetched into a temporary
+  file (`PhxMediaLibrary.LocalSource`).
+- Conversions with only a width or only a height (`width: 800`) always
+  failed (`height: nil` was passed to libvips) and the failure was hidden.
+  They now scale to that side and keep the aspect ratio.
+- `Conversions.process/2` returned `:ok` when conversions failed. It now
+  returns `{:error, {:conversions_failed, failures}}` and logs a warning, so
+  Oban retries; successful conversions are still recorded. Temp files are
+  removed on failure too. With WebP `keep_original: false`, the original is
+  kept when a conversion fails so it can be retried.
+- `AsyncProcessor.Inline.process_sync/2` returns the conversion result, and
+  the Oban adapter returns (and logs) a failed enqueue.
+- Downloaded temp files are removed when the add fails, and the stored file
+  is removed when the database insert fails.
+- Metadata extraction failed for any image whose EXIF has a date
+  (`DateTime`, `DateTimeOriginal`, `DateTimeDigitized`). `Image` decodes these
+  to `NaiveDateTime`, which the EXIF sanitizer treated as a plain map, so the
+  media was stored with empty metadata (no width/height) and a warning was
+  logged. EXIF dates are now stored as ISO 8601 strings, other structs via
+  `inspect/1`.
+- A failure while reading or sanitizing EXIF now drops only the `"exif"` key
+  instead of all extracted metadata.
+
+### Changed
+- Model lookups (mediable type, collection and conversion definitions,
+  default disk, next order, `single_file`/`max_files` cleanup) live in one
+  module, `PhxMediaLibrary.Model`, instead of copies in `MediaAdder`,
+  `PhxMediaLibrary`, `Media`, `LiveUpload` and `MediaLive`. Where the copies
+  had drifted: `complete_external_upload/4` now respects soft deletes when
+  enforcing `single_file`/`max_files`, and `max_files: 0` no longer deletes
+  every file.
+- Dialyzer now includes `:mix` in its PLT; the ignore list is empty.
+
 ## [0.8.3] - 2026-09-12
 
 ### Added

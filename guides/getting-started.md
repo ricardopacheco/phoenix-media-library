@@ -12,7 +12,7 @@ pinned to a release tag:
 ```elixir
 def deps do
   [
-    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.8.3"},
+    {:phx_media_library, github: "ricardopacheco/phoenix-media-library", tag: "v0.8.4"},
 
     # Optional: Image processing (requires libvips)
     {:image, "~> 0.54"},
@@ -296,6 +296,17 @@ PhxMediaLibrary.get_media(post)
   |> PhxMediaLibrary.add_from_url("https://api.example.com/files/123.pdf",
        headers: [{"Authorization", "Bearer my-token"}],
        timeout: 15_000)
+  |> PhxMediaLibrary.to_collection(:documents)
+
+# Remote URLs usually come from users, so downloads are guarded: hosts on
+# private or loopback networks (localhost, 10.x, 169.254.169.254, ...) are
+# refused, including after redirects; the body streams to disk without
+# decompression, capped by :max_size (the collection's max_size by default)
+# and :total_timeout (5 minutes). For an intranet source:
+{:ok, media} =
+  post
+  |> PhxMediaLibrary.add_from_url("http://files.internal/report.pdf",
+       allow_private_hosts: true)
   |> PhxMediaLibrary.to_collection(:documents)
 
 # Bang version raises on error
