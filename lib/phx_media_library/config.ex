@@ -190,21 +190,60 @@ defmodule PhxMediaLibrary.Config do
   end
 
   @doc """
-  Check if responsive images should be generated for a specific collection.
+  Check if responsive images should be generated for a collection's
+  conversions.
 
   Resolution order:
-  1. If the collection has an explicit `:responsive` setting, use it.
+  1. If the collection has an explicit `:responsive` setting, use it
+     (`true`/`false`, or a keyword — enabled unless it says `enabled: false`).
   2. Otherwise, fall back to the global `responsive_images_enabled?()` setting.
   """
+  @spec responsive_for_collection?(PhxMediaLibrary.Collection.t() | map() | nil) :: boolean()
   def responsive_for_collection?(nil), do: responsive_images_enabled?()
   def responsive_for_collection?(%{responsive: nil}), do: responsive_images_enabled?()
   def responsive_for_collection?(%{responsive: value}) when is_boolean(value), do: value
 
+  def responsive_for_collection?(%{responsive: opts}) when is_list(opts),
+    do: Keyword.get(opts, :enabled, true)
+
+  @default_responsive_widths [320, 640, 960, 1280, 1920]
+
   @doc """
   Get the widths to generate for responsive images.
   """
+  @spec responsive_image_widths() :: [pos_integer()]
   def responsive_image_widths do
-    Keyword.get(responsive_images_config(), :widths, [320, 640, 960, 1280, 1920])
+    Keyword.get(responsive_images_config(), :widths, @default_responsive_widths)
+  end
+
+  @doc """
+  Resolve the effective responsive-images settings for a collection.
+
+  Same merge rules as `resolve_webp/1`: the collection's `responsive:`
+  override (`nil`, `true`/`false` or a keyword such as `[widths: [640, 1280]]`)
+  over the global `:responsive_images` config over the defaults
+  (`enabled: false`, widths `[320, 640, 960, 1280, 1920]`,
+  `tiny_placeholder: true`). Returns a keyword with `:enabled`, `:widths` and
+  `:tiny_placeholder`; `:enabled` is forced to `false` without the `:image`
+  library.
+
+  What `:enabled` triggers depends on the caller: on upload, variants of the
+  original are only made when the collection opts in or the upload asks for
+  them (`PhxMediaLibrary.with_responsive_images/1`); the global switch alone
+  doesn't enable them for every collection.
+
+  ## Examples
+
+      iex> PhxMediaLibrary.Config.resolve_responsive(widths: [100, 200])[:widths]
+      [100, 200]
+
+  """
+  @spec resolve_responsive(PhxMediaLibrary.Collection.override()) :: keyword()
+  def resolve_responsive(override) do
+    [enabled: false, widths: @default_responsive_widths, tiny_placeholder: true]
+    |> Keyword.merge(responsive_images_config())
+    |> apply_override(override)
+    |> require_image_lib()
   end
 
   @doc """

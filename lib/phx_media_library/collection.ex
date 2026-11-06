@@ -16,7 +16,12 @@ defmodule PhxMediaLibrary.Collection do
   - `:fallback_url` — URL to use when the collection is empty
   - `:fallback_path` — filesystem path to use when the collection is empty
   - `:verify_content_type` — when `true`, verify file content matches its declared MIME type (default: `true`)
-  - `:responsive` — generate responsive image variants (`nil` falls back to the global config)
+  - `:responsive` — responsive image variants for this collection: `true`/`false`, or a
+    keyword such as `[widths: [640, 1280]]` merged over the global
+    `config :phx_media_library, :responsive_images` (see
+    `PhxMediaLibrary.Config.resolve_responsive/1`). Opting in generates variants of
+    the original on upload; `nil` (default) leaves that to
+    `PhxMediaLibrary.with_responsive_images/1` and the conversions to the global config.
   - `:webp` — WebP override for this collection: `true`/`false`, or a keyword of
     knobs (`quality:`, `keep_original:`) merged over the global
     `config :phx_media_library, :webp` (see `PhxMediaLibrary.Config.resolve_webp/1`).
@@ -51,7 +56,7 @@ defmodule PhxMediaLibrary.Collection do
           fallback_url: String.t() | nil,
           fallback_path: String.t() | nil,
           verify_content_type: boolean(),
-          responsive: boolean() | nil,
+          responsive: override(),
           webp: override()
         }
 
@@ -68,7 +73,7 @@ defmodule PhxMediaLibrary.Collection do
   - `:fallback_url` - URL when collection is empty
   - `:fallback_path` - Path when collection is empty
   - `:verify_content_type` - Verify file content matches declared MIME type (default: true)
-  - `:responsive` - Generate responsive image variants after conversions (default: nil, falls back to global config)
+  - `:responsive` - Responsive variants: `true`/`false`/keyword (`widths:`), merged over the global config (default: inherit)
   - `:webp` - Serve a WebP derivative of uploaded images: `true`/`false`/keyword, merged over the global config (default: inherit)
 
   ## Examples
@@ -78,6 +83,8 @@ defmodule PhxMediaLibrary.Collection do
       Collection.new(:photos, webp: true)
 
       Collection.new(:hero, webp: [quality: 90, keep_original: false])
+
+      Collection.new(:banners, responsive: [widths: [640, 1280, 2560]])
 
       Collection.new(:avatar, single_file: true, max_size: 2_000_000)
 

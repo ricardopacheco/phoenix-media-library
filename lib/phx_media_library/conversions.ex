@@ -148,7 +148,10 @@ defmodule PhxMediaLibrary.Conversions do
     collection_config = Helpers.collection_config(model, collection_atom)
 
     if Config.responsive_for_collection?(collection_config) do
-      generate_responsive_for_conversions(model, collection_name, item_uuid, results)
+      # The collection's `responsive: [widths: ...]` applies to conversions too
+      override = collection_config && collection_config.responsive
+      opts = [widths: Config.resolve_responsive(override)[:widths]]
+      generate_responsive_for_conversions(model, {collection_name, item_uuid}, results, opts)
     end
   end
 
@@ -160,16 +163,16 @@ defmodule PhxMediaLibrary.Conversions do
     ArgumentError -> String.to_atom(value)
   end
 
-  defp generate_responsive_for_conversions(model, collection_name, item_uuid, results) do
+  defp generate_responsive_for_conversions(model, {collection_name, item_uuid}, results, opts) do
     # Get fresh model with updated conversions (it may have been deleted
     # while the conversions ran)
     case Config.repo().get(model.__struct__, model.id) do
       nil -> :ok
-      fresh -> generate_responsive_for_item(fresh, collection_name, item_uuid, results)
+      fresh -> generate_responsive_for_item(fresh, {collection_name, item_uuid}, results, opts)
     end
   end
 
-  defp generate_responsive_for_item(fresh, collection_name, item_uuid, results) do
+  defp generate_responsive_for_item(fresh, {collection_name, item_uuid}, results, opts) do
     column = Helpers.media_column(fresh)
     data = Map.get(fresh, column) || %{}
     owner_type = Helpers.owner_type(fresh)
@@ -187,7 +190,7 @@ defmodule PhxMediaLibrary.Conversions do
         Enum.reduce(
           conversion_names,
           media_item.responsive_images,
-          &merge_conversion_responsive(&2, media_item, &1)
+          &merge_conversion_responsive(&2, media_item, &1, opts)
         )
 
       update_item_in_jsonb(fresh, collection_name, item_uuid, fn item ->
@@ -196,8 +199,8 @@ defmodule PhxMediaLibrary.Conversions do
     end
   end
 
-  defp merge_conversion_responsive(acc, media_item, conversion_name) do
-    case ResponsiveImages.generate(media_item, conversion_name) do
+  defp merge_conversion_responsive(acc, media_item, conversion_name, opts) do
+    case ResponsiveImages.generate(media_item, conversion_name, opts) do
       {:ok, new_data} -> Map.merge(acc, new_data)
       _ -> acc
     end

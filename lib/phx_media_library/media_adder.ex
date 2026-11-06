@@ -432,10 +432,13 @@ defmodule PhxMediaLibrary.MediaAdder do
   # stored item. Each step persists its own result and returns the updated
   # item; failures are skipped so they never fail the upload.
   defp generate_derivatives(adder, model, collection_name, media_item, file_info) do
-    # Generate responsive images if requested
+    # Generate responsive images when the collection opts in or the upload
+    # asked for them. Runs after the WebP step, so variants can follow it.
+    responsive = responsive_on_add(adder, model, collection_name)
+
     media_item =
-      if adder.generate_responsive and image?(file_info.mime_type) do
-        generate_responsive_images(model, collection_name, media_item)
+      if responsive[:enabled] and image?(file_info.mime_type) do
+        generate_responsive_images(model, collection_name, media_item, responsive[:widths])
       else
         media_item
       end
@@ -571,8 +574,36 @@ defmodule PhxMediaLibrary.MediaAdder do
 
   defp coerce_float(_), do: 0.0
 
-  defp generate_responsive_images(model, collection_name, media_item) do
-    case ResponsiveImages.generate(media_item, nil) do
+  # Variants of the original are made on upload when the collection opts in
+  # (`responsive: true` or a keyword), or when the upload asked for them with
+  # with_responsive_images/1 — unless the collection says `responsive: false`
+  # or the global config explicitly sets `enabled: false`. The global switch
+  # alone doesn't enable them for every collection. Returns the resolved
+  # settings, with `:enabled` set to that decision.
+  defp responsive_on_add(adder, model, collection_name) do
+    override =
+      case Helpers.collection_config(model, collection_name) do
+        %Collection{responsive: responsive} -> responsive
+        _ -> nil
+      end
+
+    enabled? =
+      case override do
+        nil ->
+          adder.generate_responsive and
+            Keyword.get(Config.responsive_images_config(), :enabled) != false
+
+        override ->
+          Config.responsive_for_collection?(%{responsive: override})
+      end
+
+    override
+    |> Config.resolve_responsive()
+    |> Keyword.put(:enabled, enabled? and Code.ensure_loaded?(Image))
+  end
+
+  defp generate_responsive_images(model, collection_name, media_item, widths) do
+    case ResponsiveImages.generate(media_item, nil, widths: widths) do
       {:ok, responsive_data} ->
         updated_item = %{media_item | responsive_images: responsive_data}
         replace_item(model, collection_name, updated_item)

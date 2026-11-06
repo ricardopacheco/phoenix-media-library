@@ -49,7 +49,7 @@ end
 | `:fallback_url` | `String.t()` | `nil` | URL returned when collection is empty |
 | `:fallback_path` | `String.t()` | `nil` | Filesystem path returned when collection is empty |
 | `:verify_content_type` | `boolean()` | `true` | Verify file content matches declared MIME type via magic bytes |
-| `:responsive` | `boolean()` | `nil` (global config) | Generate responsive image variants after conversions; overrides global `responsive_images: [enabled: ...]` setting |
+| `:responsive` | `boolean()` or keyword | `nil` (global config) | Responsive variants: `true`/`[widths: [...]]` makes them on every upload, `false` never; see [Responsive Images](#responsive-images) |
 | `:webp` | `boolean()` or keyword | `nil` (global config) | Serve a WebP derivative of uploaded images; see [WebP](#webp) |
 
 ### Content-Type Verification
@@ -303,10 +303,24 @@ end
 
 ## Responsive Images
 
-Generate multiple sizes for optimal loading across devices.
+Generate several widths of an image so browsers download the smallest one
+that fits (`srcset`). Variants are stored in a `responsive/` folder beside the
+original, wherever the configured path generator puts it.
+
+**Opt in per collection** — variants of the original are made on every upload
+to it, and the widths can be set per collection:
 
 ```elixir
-# Enable when adding media
+media_collections do
+  collection :photos, responsive: true                              # global widths
+  collection :banners, responsive: [widths: [640, 1280, 2560]]
+  collection :avatars, responsive: false                            # never
+end
+```
+
+**Or ask for them on one upload:**
+
+```elixir
 post
 |> PhxMediaLibrary.add(upload)
 |> PhxMediaLibrary.with_responsive_images()
@@ -314,10 +328,14 @@ post
 
 # Get srcset attribute
 PhxMediaLibrary.srcset(media)
-# => "uploads/posts/1/responsive/image-320.jpg 320w, ..."
+# => "/uploads/posts/1/<uuid>/responsive/photo_320w.jpg 320w, ..."
 ```
 
-Configure responsive image widths globally:
+`with_responsive_images/1` works on its own; only a collection's
+`responsive: false`, or `enabled: false` set explicitly in the global config,
+turns it off.
+
+The global config supplies the default widths and placeholders:
 
 ```elixir
 config :phx_media_library,
@@ -327,6 +345,16 @@ config :phx_media_library,
     tiny_placeholder: true
   ]
 ```
+
+Only widths narrower than the image are generated; the full-size image is
+always the largest `srcset` entry. The global `enabled` doesn't turn on
+variants of the original for every collection — use `responsive:` for that.
+
+**Conversions** get their own variants when their collection's `responsive:`
+is on, or — when the collection doesn't set it — when the global `enabled`
+is `true`. They use the collection's widths, so with
+`responsive: [widths: [160, 320]]` an 800px `:preview` gets 160 and 320px
+variants.
 
 Regenerate responsive images for existing media:
 

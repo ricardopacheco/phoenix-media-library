@@ -56,18 +56,44 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   Generate responsive image variants for a media item.
 
   Returns updated responsive_images data to be stored on the media record.
+
+  ## Options
+
+    * `:widths` — the variant widths to generate (only those narrower than
+      the image are made). Defaults to the global
+      `config :phx_media_library, :responsive_images, widths: [...]`.
+
+  ## Examples
+
+      {:ok, data} = PhxMediaLibrary.ResponsiveImages.generate(item, nil, widths: [640, 1280])
+
   """
-  @spec generate(Media.t() | MediaItem.t(), atom() | nil) ::
+  @spec generate(Media.t() | MediaItem.t(), atom() | nil, keyword()) ::
           {:ok, responsive_data()} | {:error, term()}
-  def generate(%{disk: _, file_name: _, uuid: _} = media, conversion \\ nil) do
+  def generate(%{disk: _, file_name: _, uuid: _} = media, conversion \\ nil, opts \\ []) do
     processor = Config.image_processor()
     storage = Config.storage_adapter(media.disk)
+    widths = Keyword.get(opts, :widths) || Config.responsive_image_widths()
     {source_path, temp?} = get_source_path(media, conversion)
 
     with {:ok, image} <- processor.open(source_path),
          {:ok, {orig_width, orig_height}} <- processor.dimensions(image) do
       variants =
-        generate_variants(media, image, orig_width, orig_height, conversion, processor, storage)
+        widths
+        |> Enum.filter(&(&1 < orig_width))
+        |> Enum.map(
+          &generate_variant(
+            media,
+            image,
+            &1,
+            {orig_width, orig_height},
+            conversion,
+            processor,
+            storage
+          )
+        )
+        |> Enum.filter(&match?({:ok, _}, &1))
+        |> Enum.map(fn {:ok, variant} -> variant end)
 
       data =
         build_responsive_data(
@@ -91,12 +117,14 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   end
 
   @doc """
-  Generate responsive variants for all conversions of a media item.
+  Generate responsive variants for the original and all conversions of a
+  media item. Accepts the same options as `generate/3`.
   """
-  @spec generate_all(Media.t() | MediaItem.t()) :: {:ok, responsive_data()} | {:error, term()}
-  def generate_all(%{disk: _, file_name: _, uuid: _} = media) do
-    with {:ok, original_data} <- generate(media, nil) do
-      conversion_data = generate_conversion_data(media)
+  @spec generate_all(Media.t() | MediaItem.t(), keyword()) ::
+          {:ok, responsive_data()} | {:error, term()}
+  def generate_all(%{disk: _, file_name: _, uuid: _} = media, opts \\ []) do
+    with {:ok, original_data} <- generate(media, nil, opts) do
+      conversion_data = generate_conversion_data(media, opts)
       {:ok, Map.merge(original_data, conversion_data)}
     end
   end
@@ -162,8 +190,7 @@ defmodule PhxMediaLibrary.ResponsiveImages do
          media,
          image,
          target_width,
-         orig_width,
-         orig_height,
+         {orig_width, orig_height},
          conversion,
          processor,
          storage
@@ -228,25 +255,6 @@ defmodule PhxMediaLibrary.ResponsiveImages do
     Path.join(base_path, filename)
   end
 
-  defp generate_variants(media, image, orig_width, orig_height, conversion, processor, storage) do
-    Config.responsive_image_widths()
-    |> Enum.filter(&(&1 < orig_width))
-    |> Enum.map(
-      &generate_variant(
-        media,
-        image,
-        &1,
-        orig_width,
-        orig_height,
-        conversion,
-        processor,
-        storage
-      )
-    )
-    |> Enum.filter(&match?({:ok, _}, &1))
-    |> Enum.map(fn {:ok, variant} -> variant end)
-  end
-
   defp build_responsive_data(
          media,
          variants,
@@ -283,15 +291,15 @@ defmodule PhxMediaLibrary.ResponsiveImages do
     end
   end
 
-  defp generate_conversion_data(media) do
+  defp generate_conversion_data(media, opts) do
     media.generated_conversions
     |> Map.keys()
-    |> Enum.map(&generate_single_conversion_data(media, &1))
+    |> Enum.map(&generate_single_conversion_data(media, &1, opts))
     |> Enum.reduce(%{}, &Map.merge/2)
   end
 
-  defp generate_single_conversion_data(media, conversion_name) do
-    case generate(media, conversion_name) do
+  defp generate_single_conversion_data(media, conversion_name, opts) do
+    case generate(media, conversion_name, opts) do
       {:ok, data} -> data
       _ -> %{}
     end

@@ -30,7 +30,13 @@ defmodule PhxMediaLibrary.TestPost do
       collection(:webp_only,
         webp: [keep_original: false],
         accepts: ~w(image/jpeg image/png image/webp)
-      )
+      ),
+      # Responsive without WebP: variants keep the original extension.
+      collection(:responsive_plain,
+        responsive: [widths: [160, 320]],
+        accepts: ~w(image/jpeg image/png image/webp)
+      ),
+      collection(:responsive_off, responsive: false)
     ]
   end
 
