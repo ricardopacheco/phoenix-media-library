@@ -191,8 +191,9 @@ defmodule PhxMediaLibrary.ConversionsProcessTest do
       temp_files =
         tmp_dir
         |> File.ls!()
-        |> Enum.filter(&String.starts_with?(&1, "phx_media_conversion_"))
-        |> Enum.filter(&String.contains?(&1, "photo.png"))
+        |> Enum.filter(
+          &(String.starts_with?(&1, "phx_media_conversion_") and String.contains?(&1, "photo.png"))
+        )
 
       assert temp_files == []
 

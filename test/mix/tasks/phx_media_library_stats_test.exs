@@ -3,6 +3,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.StatsTest do
 
   @moduletag :db
 
+  alias Mix.Tasks.PhxMediaLibrary.Stats
   alias PhxMediaLibrary.Fixtures
 
   setup do
@@ -23,7 +24,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.StatsTest do
     :ok
   end
 
-  defp run(args), do: Mix.Tasks.PhxMediaLibrary.Stats.run(args)
+  defp run(args), do: Stats.run(args)
 
   defp drain_output do
     receive do

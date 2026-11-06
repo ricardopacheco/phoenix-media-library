@@ -66,6 +66,12 @@ defmodule PhxMediaLibrary.Blurhash do
   # ---------------------------------------------------------------------------
 
   if Code.ensure_loaded?(Image) do
+    # Aliased inside the conditional block so that compiling without the
+    # optional `:image` dependency doesn't emit unused-alias warnings.
+    # `VipsImage` avoids shadowing the `Image` library module.
+    alias Vix.Vips.Image, as: VipsImage
+    alias Vix.Vips.Operation
+
     @doc """
     Returns `true` when the `:image` library is available and blurhash
     generation is possible.
@@ -131,7 +137,7 @@ defmodule PhxMediaLibrary.Blurhash do
     # images have the extra bands stripped.  Grayscale (1 band) is expanded
     # to 3 bands so the encoder always receives consistent input.
     defp ensure_rgb(image) do
-      bands = Vix.Vips.Image.bands(image)
+      bands = VipsImage.bands(image)
 
       cond do
         bands == 3 ->
@@ -139,14 +145,14 @@ defmodule PhxMediaLibrary.Blurhash do
 
         bands >= 4 ->
           # Drop alpha and any extra bands, keep R/G/B
-          Vix.Vips.Operation.extract_band(image, 0, n: 3)
+          Operation.extract_band(image, 0, n: 3)
 
         bands == 1 ->
           # Grayscale → replicate to 3-band by stacking three copies
-          with {:ok, b1} <- Vix.Vips.Operation.extract_band(image, 0),
-               {:ok, b2} <- Vix.Vips.Operation.extract_band(image, 0),
-               {:ok, b3} <- Vix.Vips.Operation.extract_band(image, 0) do
-            Vix.Vips.Operation.bandjoin([b1, b2, b3])
+          with {:ok, b1} <- Operation.extract_band(image, 0),
+               {:ok, b2} <- Operation.extract_band(image, 0),
+               {:ok, b3} <- Operation.extract_band(image, 0) do
+            Operation.bandjoin([b1, b2, b3])
           end
 
         true ->
@@ -160,7 +166,7 @@ defmodule PhxMediaLibrary.Blurhash do
     # Vix.Vips.Image.write_to_binary/1 dumps pixels row-major, interleaved:
     #   <<R1, G1, B1, R2, G2, B2, ...>> for a 3-band UCHAR image.
     defp extract_pixels(image) do
-      case Vix.Vips.Image.write_to_binary(image) do
+      case VipsImage.write_to_binary(image) do
         {:ok, binary} ->
           pixels = decode_binary_pixels(binary, 3)
           {:ok, pixels}

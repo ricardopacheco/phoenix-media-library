@@ -3,6 +3,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
 
   @moduletag :db
 
+  alias Mix.Tasks.PhxMediaLibrary.Doctor
   alias PhxMediaLibrary.{Config, Fixtures, Helpers, MediaData, TestRepo}
 
   setup do
@@ -27,7 +28,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.DoctorTest do
     {:ok, local_root: local_root}
   end
 
-  defp run(args), do: Mix.Tasks.PhxMediaLibrary.Doctor.run(args)
+  defp run(args), do: Doctor.run(args)
 
   defp drain_output do
     receive do

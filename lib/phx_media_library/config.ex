@@ -3,6 +3,8 @@ defmodule PhxMediaLibrary.Config do
   Configuration helpers for PhxMediaLibrary.
   """
 
+  alias PhxMediaLibrary.VideoProcessor.FFmpeg
+
   @doc """
   Get the configured Ecto repo.
   """
@@ -153,8 +155,8 @@ defmodule PhxMediaLibrary.Config do
   end
 
   defp default_video_processor do
-    if PhxMediaLibrary.VideoProcessor.FFmpeg.available?() do
-      PhxMediaLibrary.VideoProcessor.FFmpeg
+    if FFmpeg.available?() do
+      FFmpeg
     else
       PhxMediaLibrary.VideoProcessor.Null
     end

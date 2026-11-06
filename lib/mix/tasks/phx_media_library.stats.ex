@@ -37,6 +37,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Stats do
 
   use Mix.Task
 
+  alias Ecto.Adapters.SQL
   alias PhxMediaLibrary.{Config, ModelRegistry}
 
   @impl Mix.Task
@@ -130,18 +131,15 @@ defmodule Mix.Tasks.PhxMediaLibrary.Stats do
     ORDER BY j.key
     """
 
-    case Ecto.Adapters.SQL.query!(repo, sql, params).rows do
-      rows ->
-        Enum.map(rows, fn [collection, count, total_size, avg_size] ->
-          %{
-            mediable_type: type,
-            collection_name: collection,
-            count: count,
-            total_size: total_size,
-            avg_size: avg_size
-          }
-        end)
-    end
+    Enum.map(SQL.query!(repo, sql, params).rows, fn [collection, count, total_size, avg_size] ->
+      %{
+        mediable_type: type,
+        collection_name: collection,
+        count: count,
+        total_size: total_size,
+        avg_size: avg_size
+      }
+    end)
   end
 
   defp fetch_disk_stats(repo, table, column, collection_filter) do
@@ -162,7 +160,7 @@ defmodule Mix.Tasks.PhxMediaLibrary.Stats do
     GROUP BY 1
     """
 
-    Ecto.Adapters.SQL.query!(repo, sql, params).rows
+    SQL.query!(repo, sql, params).rows
   end
 
   defp merge_disk_stats(acc, rows) do
