@@ -74,7 +74,18 @@ if Code.ensure_loaded?(Image) do
 
     # Private functions
 
+    # libvips' documented way to constrain one side only: make the other huge.
+    @unbounded 10_000_000
+
     defp maybe_resize(image, %{width: nil, height: nil}), do: {:ok, image}
+
+    # One side given: scale to it and keep the aspect ratio (`fit` needs a box).
+    # Passing `height: nil` to Image.thumbnail/3 is an invalid option.
+    defp maybe_resize(image, %{width: w, height: nil}),
+      do: Image.thumbnail(image, w, height: @unbounded)
+
+    defp maybe_resize(image, %{width: nil, height: h}),
+      do: Image.thumbnail(image, @unbounded, height: h)
 
     defp maybe_resize(image, %{width: w, height: h, fit: :crop}) do
       Image.thumbnail(image, w || h, height: h, fit: :cover, crop: :center)
