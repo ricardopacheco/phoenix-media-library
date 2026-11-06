@@ -338,7 +338,10 @@ defmodule PhxMediaLibrary.MediaAdder do
         :ok
 
       _ ->
-        MimeDetector.verify(header, file_info.filename, file_info.mime_type)
+        # Compare the content with the type the *extension* claims: it decides
+        # how the file is served. (file_info.mime_type is already the detected
+        # type, so comparing against it would always pass.)
+        MimeDetector.verify(header, file_info.filename, MIME.from_path(file_info.filename))
     end
   end
 

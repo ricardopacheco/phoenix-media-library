@@ -98,4 +98,45 @@ defmodule PhxMediaLibrary.UploadHardeningTest do
       assert File.read!(sibling) == "untouched"
     end
   end
+
+  describe "content-type verification" do
+    defp png_named(name) do
+      png = create_temp_image(format: :png, width: 10, height: 10)
+      path = Path.join(Path.dirname(png), "#{System.unique_integer([:positive])}_#{name}")
+      File.rename!(png, path)
+      on_exit(fn -> File.rm(path) end)
+      path
+    end
+
+    test "image bytes named .html are refused", %{post: post} do
+      upload = %{path: png_named("x.html"), filename: "page.html"}
+
+      assert {:error, {:content_type_mismatch, "image/png", "text/html"}} =
+               post
+               |> PhxMediaLibrary.add(upload)
+               |> PhxMediaLibrary.to_collection(:images, disk: :local)
+
+      assert TestPost |> TestRepo.get!(post.id) |> PhxMediaLibrary.get_media(:images) == []
+    end
+
+    test "a PNG saved as .jpg is fine (same family)", %{post: post} do
+      upload = %{path: png_named("x.jpg"), filename: "photo.jpg"}
+
+      assert {:ok, media} =
+               post
+               |> PhxMediaLibrary.add(upload)
+               |> PhxMediaLibrary.to_collection(:images, disk: :local)
+
+      assert media.mime_type == "image/png"
+    end
+
+    test "verify_content_type: false opts out", %{post: post} do
+      upload = %{path: png_named("x.html"), filename: "page.html"}
+
+      assert {:ok, _media} =
+               post
+               |> PhxMediaLibrary.add(upload)
+               |> PhxMediaLibrary.to_collection(:unverified, disk: :local)
+    end
+  end
 end
