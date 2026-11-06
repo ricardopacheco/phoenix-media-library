@@ -207,13 +207,13 @@ defmodule PhxMediaLibrary.ResponsiveImages do
   end
 
   defp responsive_variant_path(media, conversion, width) do
+    # Variants live in a `responsive/` folder beside the original, wherever the
+    # configured path generator puts it (tenant, date-based, custom layouts).
     base_path =
-      Path.join([
-        to_string(media.owner_type),
-        to_string(media.owner_id),
-        media.uuid,
-        "responsive"
-      ])
+      media
+      |> PathGenerator.relative_path(nil)
+      |> Path.dirname()
+      |> Path.join("responsive")
 
     ext = Path.extname(media.file_name)
     base_name = Path.rootname(media.file_name)
